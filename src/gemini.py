@@ -9,6 +9,7 @@ import logging
 import os
 from typing import Any, Optional
 
+import google.ai.generativelanguage as glm
 import google.generativeai as genai
 
 from src.kv import get_history, get_memory, save_history, save_memory
@@ -231,20 +232,22 @@ async def chat_with_oline(chat_id: int, user_message: str) -> str:
                     result = await _execute_function_call(fc, chat_id)
 
                     function_responses.append(
-                        genai.types.Part.from_function_response(
-                            name=fc.name,
-                            response=result,
+                        glm.Part(
+                            function_response=glm.FunctionResponse(
+                                name=fc.name,
+                                response=result,
+                            )
                         )
                     )
 
             if not has_function_call:
                 break
 
-            # Tambahkan response model + function results ke contents
+            # Tambahkan response model + function results ke contents (dengan role='user')
             contents.append(candidate.content)
             contents.append(
-                genai.types.Content(
-                    role="function",
+                glm.Content(
+                    role="user",
                     parts=function_responses,
                 )
             )
