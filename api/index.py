@@ -1,8 +1,6 @@
 """
 Vercel Serverless Function – Entrypoint webhook untuk Oline Telegram Bot.
-
-Menerima POST update dari Telegram webhook dan memprosesnya.
-GET request digunakan sebagai health check sederhana.
+WSGI compliant handler.
 """
 
 import asyncio
@@ -10,7 +8,6 @@ import json
 import logging
 import os
 import sys
-from http.server import BaseHTTPRequestHandler
 
 # Tambahkan root project ke path agar import src/ berfungsi
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -25,15 +22,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Webhook secret untuk validasi request dari Telegram
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 
 
 def run_async(coro):
-    """
-    Helper aman untuk menjalankan coroutine di Vercel Serverless.
-    Mencegah RuntimeError: Event loop is closed saat container direuse.
-    """
+    """Run async coroutine safely on Vercel Serverless."""
     try:
         loop = asyncio.get_event_loop()
         if loop.is_closed():
@@ -46,86 +39,71 @@ def run_async(coro):
     return loop.run_until_complete(coro)
 
 
-class handler(BaseHTTPRequestHandler):
+async def _process_update(update_data: dict) -> None:
+    """Proses Telegram update melalui bot application."""
+    app = create_application()
+    async with app:
+        update = Update.de_json(update_data, app.bot)
+        if update:
+            await app.process_update(update)
+
+
+def app(environ, start_response):
     """
-    Vercel serverless handler.
-    POST: Menerima Telegram webhook update.
-    GET: Health check.
+    WSGI Application handler untuk Vercel Serverless.
     """
+    method = environ.get("REQUEST_METHOD", "GET").upper()
 
-    def do_GET(self):
-        """Health check endpoint."""
+    if method == "GET":
+        status = "200 OK"
+        response_headers = [("Content-Type", "application/json")]
+        start_response(status, response_headers)
+        body = json.dumps({
+            "status": "ok",
+            "bot": "Oline",
+            "message": "Oline is running! 🤖",
+        }).encode("utf-8")
+        return [body]
+
+    if method == "POST":
         try:
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            response = json.dumps({
-                "status": "ok",
-                "bot": "Oline",
-                "message": "Oline is running! 🤖",
-            })
-            self.wfile.write(response.encode("utf-8"))
-        except Exception as e:
-            logger.error("Error in do_GET: %s", str(e))
-
-    def do_POST(self):
-        """Menerima dan memproses Telegram webhook update."""
-        try:
-            # Baca request body
-            content_length = int(self.headers.get("Content-Length", 0))
-            if content_length == 0:
-                self.send_response(400)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(b'{"error": "Empty body"}')
-                return
-
-            body = self.rfile.read(content_length)
-
-            # Validasi webhook secret jika dikonfigurasi
+            # Validasi secret header jika dikonfigurasi
             if WEBHOOK_SECRET:
-                secret_header = self.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+                secret_header = environ.get("HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN", "")
                 if secret_header != WEBHOOK_SECRET:
-                    logger.warning("Invalid webhook secret received")
-                    self.send_response(403)
-                    self.end_headers()
-                    return
+                    status = "403 Forbidden"
+                    start_response(status, [("Content-Type", "text/plain")])
+                    return [b"Forbidden"]
 
-            # Parse update
-            update_data = json.loads(body.decode("utf-8"))
-            logger.info("Received update ID: %s", update_data.get("update_id", "unknown"))
-
-            # Proses update secara async menggunakan event loop manager
-            run_async(self._process_update(update_data))
-
-            # Respond OK ke Telegram
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"ok": true}')
-
-        except json.JSONDecodeError:
-            logger.error("Invalid JSON in request body")
-            self.send_response(400)
-            self.end_headers()
-        except Exception as e:
-            logger.error("Error processing update: %s", str(e), exc_info=True)
-            # Tetap return 200 ke Telegram agar tidak retry terus jika ada error di bot logic
+            # Baca request body dari WSGI input stream
             try:
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(b'{"ok": true}')
-            except Exception:
-                pass
+                content_length = int(environ.get("CONTENT_LENGTH", 0))
+            except (ValueError, TypeError):
+                content_length = 0
 
-    async def _process_update(self, update_data: dict) -> None:
-        """Proses Telegram update melalui bot application."""
-        try:
-            app = create_application()
-            async with app:
-                update = Update.de_json(update_data, app.bot)
-                if update:
-                    await app.process_update(update)
+            wsgi_input = environ.get("wsgi.input")
+            if wsgi_input and content_length > 0:
+                body_bytes = wsgi_input.read(content_length)
+            elif wsgi_input:
+                body_bytes = wsgi_input.read()
+            else:
+                body_bytes = b""
+
+            if body_bytes:
+                update_data = json.loads(body_bytes.decode("utf-8"))
+                logger.info("Processing Telegram Update: %s", update_data.get("update_id"))
+                run_async(_process_update(update_data))
+
         except Exception as e:
-            logger.error("Error in _process_update: %s", str(e), exc_info=True)
+            logger.error("Error handling POST update: %s", str(e), exc_info=True)
+
+        # Selalu kembalikan 200 OK ke Telegram
+        status = "200 OK"
+        response_headers = [("Content-Type", "application/json")]
+        start_response(status, response_headers)
+        return [b'{"ok": true}']
+
+    # Default fallback
+    status = "200 OK"
+    start_response(status, [("Content-Type", "application/json")])
+    return [b'{"ok": true}']
