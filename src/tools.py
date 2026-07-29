@@ -187,10 +187,17 @@ async def get_movie_recommendation(
 
             results = data.get("results", [])
 
-            # Jika search kosong dan ada genre, coba discover
-            if not results and genre:
-                genre_lower = genre.lower()
-                genre_id = genre_map.get(genre_lower)
+            # Coba deteksi genre dari query jika genre belum diisi
+            target_genre = genre
+            if not target_genre:
+                for g_name in genre_map:
+                    if g_name in query.lower():
+                        target_genre = g_name
+                        break
+
+            # Jika search kosong, coba discover berdasarkan genre
+            if not results and target_genre:
+                genre_id = genre_map.get(target_genre.lower())
                 if genre_id:
                     discover_params: dict[str, Any] = {
                         "api_key": TMDB_API_KEY,
@@ -222,6 +229,11 @@ async def get_movie_recommendation(
 
             return {"movies": movies, "total_results": data.get("total_results", 0)}
 
+    except httpx.HTTPStatusError as e:
+        logger.error("TMDb HTTP error: %s", e.response.status_code)
+        if e.response.status_code == 401:
+            return {"error": "TMDb API key tidak valid atau belum diaktifkan."}
+        return {"error": f"Gagal mengakses TMDb API (Status {e.response.status_code})."}
     except httpx.RequestError as e:
         logger.error("TMDb API error: %s", str(e))
         return {"error": f"Gagal mengakses TMDb API: {str(e)}"}
