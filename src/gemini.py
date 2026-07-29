@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # Konfigurasi Gemini API
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
 
 
 def _configure_gemini():
@@ -64,20 +64,39 @@ def _build_system_prompt(memory: str) -> str:
 
 def _format_history_for_gemini(history: list[dict]) -> list[dict]:
     """
-    Convert riwayat percakapan dari KV ke format Gemini contents.
-    Format KV: [{"role": "user|model", "text": "..."}]
-    Format Gemini: [{"role": "user|model", "parts": [{"text": "..."}]}]
+    Convert dan bersihkan riwayat percakapan dari KV ke format Gemini contents.
+    Memastikan riwayat SELALU berselang-seling antara 'user' dan 'model'.
+    Jika ada 2 pesan berurutan dengan peran sama, teks digabungkan.
     """
-    contents = []
+    if not history:
+        return []
+
+    cleaned = []
     for msg in history:
         role = msg.get("role", "user")
-        text = msg.get("text", "")
-        if text:
-            contents.append({
+        text = msg.get("text", "").strip()
+
+        if not text:
+            continue
+
+        # Normalisasi role
+        role = "user" if role != "model" else "model"
+
+        if cleaned and cleaned[-1]["role"] == role:
+            # Penggabungan teks jika role berturut-turut sama
+            cleaned[-1]["parts"][0]["text"] += f"\n{text}"
+        else:
+            cleaned.append({
                 "role": role,
                 "parts": [{"text": text}],
             })
-    return contents
+
+    # Jika item terakhir di cleaned adalah 'user', hapus agar pesan user baru yang akan di-append
+    # tidak menghasilkan 2 'user' berturut-turut
+    if cleaned and cleaned[-1]["role"] == "user":
+        cleaned.pop()
+
+    return cleaned
 
 
 async def _execute_function_call(
