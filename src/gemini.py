@@ -52,7 +52,12 @@ def _build_tools() -> list[genai.types.Tool]:
 
 def _build_system_prompt(memory: str, user_name: str = "Teman") -> str:
     """Build system prompt lengkap dengan nama pengguna & memori."""
-    prompt = OLINE_SYSTEM_PROMPT.format(user_name=user_name)
+    if user_name and user_name not in ("Anonim", "Teman"):
+        user_info = f"- Nama Pengguna: {user_name} (Sapa pengguna secara ramah dan santai dengan nama {user_name})."
+    else:
+        user_info = "- Nama Pengguna belum diketahui secara pasti. Jika pengguna memberi tahu namanya (misal: 'namaku Doni'), ingat nama tersebut."
+
+    prompt = OLINE_SYSTEM_PROMPT.format(user_info_section=user_info)
 
     if memory:
         prompt += MEMORY_INJECTION_TEMPLATE.format(memory=memory)
@@ -273,5 +278,8 @@ async def chat_with_oline(
         return bot_response
 
     except Exception as e:
-        logger.error("Error in chat_with_oline: %s", str(e), exc_info=True)
+        err_msg = str(e)
+        logger.error("Error in chat_with_oline: %s", err_msg, exc_info=True)
+        if "429" in err_msg or "quota" in err_msg.lower() or "rate" in err_msg.lower():
+            return "aduh, kamu ngetiknya terlalu cepat nih 😅 jeda 5-10 detik terus chat aku lagi ya!"
         return "aduh maaf, aku lagi ada masalah teknis nih 😅 coba lagi nanti ya!"
