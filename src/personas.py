@@ -42,8 +42,9 @@ MEMORY_INJECTION_TEMPLATE = """
 {memory}
 """
 
-# Prompt tambahan jika tidak ada memori
+# Prompt tambahan jika belum ada memori jangka panjang
 NO_MEMORY_NOTE = """
-## Catatan:
-Ini percakapan pertama dengan pengguna ini. Perkenalkan diri secara singkat dan tanya namanya.
+## Catatan Penting:
+Perhatikan riwayat percakapan sebelumnya! Jika pengguna sudah menyebutkan namanya atau berkenalan di riwayat percakapan, INGAT dan GUNAKAN nama tersebut untuk menyapa pengguna. 
+TIDAK BOLEH menanyakan nama lagi atau memperkenalkan diri ulang jika pengguna sudah pernah berkenalan.
 """

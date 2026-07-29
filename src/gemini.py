@@ -270,8 +270,13 @@ async def chat_with_oline(chat_id: int, user_message: str) -> str:
         history.append({"role": "model", "text": bot_response})
         await save_history(chat_id, history)
 
-        # 9. Update memori (setiap 5 pesan untuk efisiensi)
-        if len(history) % 10 == 0:  # Setiap 5 pertukaran (10 pesan)
+        # 9. Update memori jika belum ada memori, jika pengguna sebutkan nama, atau secara berkala
+        should_update_memory = (
+            not memory
+            or any(kw in user_message.lower() for kw in ["nama", "namaku", "panggil", "aku "])
+            or len(history) % 6 == 0
+        )
+        if should_update_memory:
             await _update_memory(chat_id, user_message, bot_response, memory)
 
         return bot_response
