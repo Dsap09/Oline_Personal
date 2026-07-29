@@ -15,7 +15,6 @@ import google.generativeai as genai
 from src.kv import get_history, get_memory, save_history, save_memory
 from src.personas import (
     MEMORY_INJECTION_TEMPLATE,
-    NO_MEMORY_NOTE,
     OLINE_SYSTEM_PROMPT,
 )
 from src.tools import TOOL_DECLARATIONS, TOOL_EXECUTORS
