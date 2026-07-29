@@ -46,10 +46,10 @@ def set_webhook(vercel_url: str) -> None:
     result = response.json()
 
     if result.get("ok"):
-        print("Webhook berhasil diatur! ✅")
+        print("Webhook berhasil diatur! [SUCCESS]")
         print(f"Response: {result.get('description', '')}")
     else:
-        print(f"Gagal mengatur webhook ❌")
+        print(f"Gagal mengatur webhook [FAIL]")
         print(f"Error: {result.get('description', 'Unknown error')}")
         sys.exit(1)
 
