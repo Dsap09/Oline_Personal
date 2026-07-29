@@ -4,6 +4,7 @@ Mengelola percakapan dengan Gemini API termasuk function calling,
 memori pengguna, dan riwayat percakapan.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Konfigurasi Gemini API
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
 
 
 def _configure_gemini():
@@ -167,6 +168,42 @@ Format output: langsung tuliskan ringkasan memori tanpa prefix atau label."""
         logger.error("Failed to update memory: %s", str(e))
 
 
+async def _generate_content_with_retry(
+    model: genai.GenerativeModel, contents: Any, max_retries: int = 3, initial_delay: float = 1.0
+) -> Any:
+    """
+    Memanggil model.generate_content dengan exponential backoff retry jika terkena 429/Rate Limit.
+    """
+    delay = initial_delay
+    last_exception = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            return await asyncio.to_thread(model.generate_content, contents)
+        except Exception as e:
+            err_msg = str(e).lower()
+            last_exception = e
+            is_rate_limit = (
+                "429" in err_msg
+                or "quota" in err_msg
+                or "rate" in err_msg
+                or "resourceexhausted" in err_msg
+            )
+
+            if is_rate_limit and attempt < max_retries:
+                logger.warning(
+                    "Gemini API Rate Limit hit (attempt %d/%d). Retrying in %.1fs... Error: %s",
+                    attempt,
+                    max_retries,
+                    delay,
+                    str(e),
+                )
+                await asyncio.sleep(delay)
+                delay *= 2.0
+            else:
+                raise last_exception
+
+
 async def chat_with_oline(
     chat_id: int, user_message: str, user_name: str = "Teman"
 ) -> str:
@@ -207,8 +244,8 @@ async def chat_with_oline(
             "parts": [{"text": user_message}],
         })
 
-        # 5. Generate response (mungkin function call)
-        response = model.generate_content(contents)
+        # 5. Generate response (mungkin function call) dengan retry
+        response = await _generate_content_with_retry(model, contents)
 
         # 6. Handle function calling loop
         max_iterations = 3  # Batas safety untuk loop function calling
@@ -257,7 +294,7 @@ async def chat_with_oline(
             )
 
             # Generate lagi dengan function results
-            response = model.generate_content(contents)
+            response = await _generate_content_with_retry(model, contents)
 
         # 7. Extract final text response
         bot_response = ""
@@ -280,6 +317,11 @@ async def chat_with_oline(
     except Exception as e:
         err_msg = str(e)
         logger.error("Error in chat_with_oline: %s", err_msg, exc_info=True)
-        if "429" in err_msg or "quota" in err_msg.lower() or "rate" in err_msg.lower():
-            return "aduh, kamu ngetiknya terlalu cepat nih 😅 jeda 5-10 detik terus chat aku lagi ya!"
+        if (
+            "429" in err_msg
+            or "quota" in err_msg.lower()
+            or "rate" in err_msg.lower()
+            or "resourceexhausted" in err_msg.lower()
+        ):
+            return "aduh, trafik server AI lagi penuh banget nih 😅 coba kirim pesan lagi sebentar ya!"
         return "aduh maaf, aku lagi ada masalah teknis nih 😅 coba lagi nanti ya!"
