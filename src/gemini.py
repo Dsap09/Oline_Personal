@@ -51,14 +51,12 @@ def _build_tools() -> list[genai.types.Tool]:
     return [genai.types.Tool(function_declarations=function_declarations)]
 
 
-def _build_system_prompt(memory: str) -> str:
-    """Build system prompt lengkap dengan memori pengguna."""
-    prompt = OLINE_SYSTEM_PROMPT
+def _build_system_prompt(memory: str, user_name: str = "Teman") -> str:
+    """Build system prompt lengkap dengan nama pengguna & memori."""
+    prompt = OLINE_SYSTEM_PROMPT.format(user_name=user_name)
 
     if memory:
         prompt += MEMORY_INJECTION_TEMPLATE.format(memory=memory)
-    else:
-        prompt += NO_MEMORY_NOTE
 
     return prompt
 
@@ -118,7 +116,6 @@ async def _execute_function_call(
     # Untuk journal functions, inject chat_id
     if func_name in ("save_journal_entry", "get_journal_recap"):
         func_args["chat_id"] = chat_id
-        # Remap 'text' parameter for save_journal_entry
         if func_name == "save_journal_entry":
             return await executor(
                 chat_id=chat_id,
@@ -166,7 +163,9 @@ Format output: langsung tuliskan ringkasan memori tanpa prefix atau label."""
         logger.error("Failed to update memory: %s", str(e))
 
 
-async def chat_with_oline(chat_id: int, user_message: str) -> str:
+async def chat_with_oline(
+    chat_id: int, user_message: str, user_name: str = "Teman"
+) -> str:
     """
     Main function untuk chat dengan Oline.
     Mengelola seluruh alur: memori, riwayat, function calling, dan respons.
@@ -174,6 +173,7 @@ async def chat_with_oline(chat_id: int, user_message: str) -> str:
     Args:
         chat_id: Telegram chat ID pengguna
         user_message: Pesan teks dari pengguna
+        user_name: Nama pengguna dari profil Telegram
 
     Returns:
         Respons teks dari Oline
@@ -185,8 +185,8 @@ async def chat_with_oline(chat_id: int, user_message: str) -> str:
         memory = await get_memory(chat_id)
         history = await get_history(chat_id)
 
-        # 2. Build system prompt
-        system_prompt = _build_system_prompt(memory)
+        # 2. Build system prompt dengan user_name
+        system_prompt = _build_system_prompt(memory, user_name=user_name)
 
         # 3. Buat model dengan tools
         tools = _build_tools()
@@ -265,22 +265,14 @@ async def chat_with_oline(chat_id: int, user_message: str) -> str:
         if not bot_response:
             bot_response = "hmm, aku lagi error nih. coba lagi nanti ya 😅"
 
-        # 8. Update riwayat percakapan
-        history.append({"role": "user", "text": user_message})
-        history.append({"role": "model", "text": bot_response})
-        await save_history(chat_id, history)
-
-        # 9. Update memori jika belum ada memori, jika pengguna sebutkan nama, atau secara berkala
-        should_update_memory = (
-            not memory
-            or any(kw in user_message.lower() for kw in ["nama", "namaku", "panggil", "aku "])
-            or len(history) % 6 == 0
-        )
-        if should_update_memory:
-            await _update_memory(chat_id, user_message, bot_response, memory)
+        # 8. Update riwayat percakapan (hanya jika sukses dan tidak error)
+        if "masalah teknis" not in bot_response and "error nih" not in bot_response:
+            history.append({"role": "user", "text": user_message})
+            history.append({"role": "model", "text": bot_response})
+            await save_history(chat_id, history)
 
         return bot_response
 
     except Exception as e:
-        logger.error("Error in chat_with_oline: %s", str(e))
+        logger.error("Error in chat_with_oline: %s", str(e), exc_info=True)
         return "aduh maaf, aku lagi ada masalah teknis nih 😅 coba lagi nanti ya!"

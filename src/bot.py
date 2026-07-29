@@ -160,8 +160,13 @@ async def handle_message(
     # Kirim "typing" action
     await update.effective_chat.send_action("typing")
 
+    # Ambil nama pengguna dari Telegram
+    user_name = "Teman"
+    if update.effective_user and update.effective_user.first_name:
+        user_name = update.effective_user.first_name
+
     # Proses lewat Gemini
-    response = await chat_with_oline(chat_id, user_message)
+    response = await chat_with_oline(chat_id, user_message, user_name=user_name)
 
     # Kirim respons (split jika terlalu panjang)
     if len(response) > 4096:
