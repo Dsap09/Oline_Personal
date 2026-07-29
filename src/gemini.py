@@ -168,18 +168,48 @@ Format output: langsung tuliskan ringkasan memori tanpa prefix atau label."""
         logger.error("Failed to update memory: %s", str(e))
 
 
-async def _generate_content_with_retry(
-    model: genai.GenerativeModel, contents: Any, max_retries: int = 3, initial_delay: float = 1.0
-) -> Any:
+# Model kandidat untuk rotasi & fallback otomatis jika salah satu model terkena 429/quota limit
+DEFAULT_MODEL_CANDIDATES = [
+    "gemini-3.6-flash",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-flash-latest",
+]
+
+
+def _get_model_candidates() -> list[str]:
+    """Mengembalikan daftar model kandidat, memprioritaskan GEMINI_MODEL dari env jika ada."""
+    configured = os.environ.get("GEMINI_MODEL", "").strip()
+    candidates = list(DEFAULT_MODEL_CANDIDATES)
+    if configured and configured in candidates:
+        candidates.remove(configured)
+        candidates.insert(0, configured)
+    elif configured:
+        candidates.insert(0, configured)
+    return candidates
+
+
+async def _generate_content_with_fallback(
+    system_prompt: str, tools: list[genai.types.Tool], contents: Any
+) -> tuple[Any, str]:
     """
-    Memanggil model.generate_content dengan exponential backoff retry jika terkena 429/Rate Limit.
+    Memanggil model.generate_content dengan rotasi & fallback otomatis antar model kandidat.
+    Jika satu model terkena 429 / Rate Limit / Quota Exceeded, otomatis mencoba model cadangan berikutnya.
+    Returns: (response, used_model_name)
     """
-    delay = initial_delay
+    candidates = _get_model_candidates()
     last_exception = None
 
-    for attempt in range(1, max_retries + 1):
+    for model_name in candidates:
         try:
-            return await asyncio.to_thread(model.generate_content, contents)
+            model = genai.GenerativeModel(
+                model_name,
+                system_instruction=system_prompt,
+                tools=tools,
+            )
+            response = await asyncio.to_thread(model.generate_content, contents)
+            logger.info("Successfully generated content using model: %s", model_name)
+            return response, model_name
         except Exception as e:
             err_msg = str(e).lower()
             last_exception = e
@@ -188,20 +218,21 @@ async def _generate_content_with_retry(
                 or "quota" in err_msg
                 or "rate" in err_msg
                 or "resourceexhausted" in err_msg
+                or "404" in err_msg
             )
-
-            if is_rate_limit and attempt < max_retries:
+            if is_rate_limit:
                 logger.warning(
-                    "Gemini API Rate Limit hit (attempt %d/%d). Retrying in %.1fs... Error: %s",
-                    attempt,
-                    max_retries,
-                    delay,
+                    "Model %s failed with rate limit/quota (%s). Falling back to next model candidate...",
+                    model_name,
                     str(e),
                 )
-                await asyncio.sleep(delay)
-                delay *= 2.0
+                continue
             else:
-                raise last_exception
+                raise e
+
+    if last_exception:
+        raise last_exception
+    raise RuntimeError("All Gemini model candidates failed.")
 
 
 async def chat_with_oline(
@@ -229,13 +260,8 @@ async def chat_with_oline(
         # 2. Build system prompt dengan user_name
         system_prompt = _build_system_prompt(memory, user_name=user_name)
 
-        # 3. Buat model dengan tools
+        # 3. Buat tools
         tools = _build_tools()
-        model = genai.GenerativeModel(
-            GEMINI_MODEL,
-            system_instruction=system_prompt,
-            tools=tools,
-        )
 
         # 4. Siapkan conversation contents
         contents = _format_history_for_gemini(history)
@@ -244,8 +270,10 @@ async def chat_with_oline(
             "parts": [{"text": user_message}],
         })
 
-        # 5. Generate response (mungkin function call) dengan retry
-        response = await _generate_content_with_retry(model, contents)
+        # 5. Generate response (mungkin function call) dengan automatic fallback
+        response, used_model = await _generate_content_with_fallback(
+            system_prompt, tools, contents
+        )
 
         # 6. Handle function calling loop
         max_iterations = 3  # Batas safety untuk loop function calling
@@ -294,7 +322,9 @@ async def chat_with_oline(
             )
 
             # Generate lagi dengan function results
-            response = await _generate_content_with_retry(model, contents)
+            response, used_model = await _generate_content_with_fallback(
+                system_prompt, tools, contents
+            )
 
         # 7. Extract final text response
         bot_response = ""
