@@ -174,10 +174,11 @@ Format output: langsung tuliskan ringkasan memori tanpa prefix atau label."""
 
 # Model kandidat untuk rotasi & fallback otomatis jika salah satu model terkena 429/404/quota limit
 DEFAULT_MODEL_CANDIDATES = [
+    "gemini-flash-latest",
     "gemini-2.0-flash",
-    "gemini-1.5-flash-latest",
-    "gemini-1.5-pro-latest",
-    "gemini-1.5-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-flash-lite-latest",
+    "gemini-pro-latest",
 ]
 
 
