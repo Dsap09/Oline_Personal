@@ -84,6 +84,12 @@ async def generate_elevenlabs_tts(text: str) -> bytes:
             fallback_url = f"{ELEVENLABS_TTS_URL}/{DEFAULT_PREMADE_VOICE_ID}"
             response = await client.post(fallback_url, headers=headers, json=payload)
 
+        if response.status_code == 402:
+            logger.error("ElevenLabs 402 Payment Required: %s", response.text)
+            raise RuntimeError(
+                "Kuota karakter suara gratis akun ElevenLabs Anda (10.000 karakter/bulan) sudah habis untuk bulan ini, atau Voice ID membutuhkan paket berbayar."
+            )
+
         if response.status_code != 200:
             logger.error(
                 "ElevenLabs API error (Status %d): %s",
