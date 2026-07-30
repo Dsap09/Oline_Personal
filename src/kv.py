@@ -13,31 +13,26 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Vercel KV REST API credentials dari environment variables
-KV_REST_API_URL = os.environ.get("KV_REST_API_URL", "")
-KV_REST_API_TOKEN = os.environ.get("KV_REST_API_TOKEN", "")
-
-# Prefix keys
-MEMORY_PREFIX = "memory"
-JOURNAL_PREFIX = "jurnal"
-HISTORY_PREFIX = "history"
-RATE_PREFIX = "rate"
-USAGE_PREFIX = "gemini_usage"
-TTS_PREFIX = "tts_usage"
+def _get_kv_credentials() -> tuple[str, str]:
+    """Mengambil credentials Upstash Redis / Vercel KV dari environment variables."""
+    url = os.environ.get("KV_REST_API_URL") or os.environ.get("UPSTASH_REDIS_REST_URL", "")
+    token = os.environ.get("KV_REST_API_TOKEN") or os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
+    return url.rstrip("/"), token
 
 
 async def _kv_request(command: list[str]) -> dict | None:
     """
-    Mengirim command Redis ke Vercel KV REST API.
+    Mengirim command Redis ke Vercel KV / Upstash Redis REST API.
     Menggunakan pipeline endpoint untuk single command.
     """
-    if not KV_REST_API_URL or not KV_REST_API_TOKEN:
-        logger.warning("Vercel KV credentials not configured. Skipping KV operation.")
+    kv_url, kv_token = _get_kv_credentials()
+    if not kv_url or not kv_token:
+        logger.warning("Vercel KV / Upstash Redis credentials not configured. Skipping KV operation.")
         return None
 
-    url = f"{KV_REST_API_URL}/pipeline"
+    url = f"{kv_url}/pipeline"
     headers = {
-        "Authorization": f"Bearer {KV_REST_API_TOKEN}",
+        "Authorization": f"Bearer {kv_token}",
         "Content-Type": "application/json",
     }
     payload = [command]
