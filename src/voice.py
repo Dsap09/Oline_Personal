@@ -38,7 +38,7 @@ async def send_chat_action_record_voice(chat_id: int) -> bool:
         return False
 
 
-DEFAULT_PREMADE_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"  # Rachel (Free premade voice)
+DEFAULT_PREMADE_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"  # Sarah (Active Free Premade Voice)
 
 
 async def generate_elevenlabs_tts(text: str) -> bytes:
