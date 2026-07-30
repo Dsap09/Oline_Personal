@@ -1,7 +1,7 @@
 """
 Gemini AI client untuk Oline bot.
-Mengelola percakapan dengan Gemini API termasuk function calling,
-memori pengguna, dan riwayat percakapan.
+Mengelola percakapan dengan Gemini API (menggunakan google-genai SDK)
+termasuk function calling, memori pengguna, dan riwayat percakapan.
 """
 
 import asyncio
@@ -10,45 +10,47 @@ import logging
 import os
 from typing import Any, Optional
 
-import google.ai.generativelanguage as glm
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 from src.kv import get_history, get_memory, save_history, save_memory, save_usage
 from src.personas import (
     MEMORY_INJECTION_TEMPLATE,
     OLINE_SYSTEM_PROMPT,
 )
-from src.tools import TOOL_DECLARATIONS, TOOL_EXECUTORS
+from src.tools import TOOL_EXECUTORS, get_tools_for_intent
 
 logger = logging.getLogger(__name__)
 
 # Konfigurasi Gemini API
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-lite-latest")
 
 
-def _configure_gemini():
-    """Konfigurasi Gemini API client."""
+def _get_client() -> genai.Client:
+    """Mengembalikan instance Client dari google-genai SDK."""
     if not GEMINI_API_KEY:
         raise ValueError(
             "GEMINI_API_KEY environment variable is not set. "
             "Cannot initialize Gemini client."
         )
-    genai.configure(api_key=GEMINI_API_KEY)
+    return genai.Client(api_key=GEMINI_API_KEY)
 
 
-def _build_tools() -> list[genai.types.Tool]:
-    """Build Gemini Tool objects dari deklarasi."""
+def _build_tools(tool_declarations: list[dict]) -> Optional[list[types.Tool]]:
+    """Build google-genai Tool objects dari daftar deklarasi terfilter."""
+    if not tool_declarations:
+        return None
     function_declarations = []
-    for tool_decl in TOOL_DECLARATIONS:
+    for tool_decl in tool_declarations:
         function_declarations.append(
-            genai.types.FunctionDeclaration(
+            types.FunctionDeclaration(
                 name=tool_decl["name"],
                 description=tool_decl["description"],
                 parameters=tool_decl["parameters"],
             )
         )
-    return [genai.types.Tool(function_declarations=function_declarations)]
+    return [types.Tool(function_declarations=function_declarations)]
 
 
 def _build_system_prompt(memory: str, user_name: str = "Teman") -> str:
@@ -69,25 +71,25 @@ def _build_system_prompt(memory: str, user_name: str = "Teman") -> str:
 def _format_history_for_gemini(history: list[dict]) -> list[dict]:
     """
     Convert dan bersihkan riwayat percakapan dari KV ke format Gemini contents.
-    Memastikan riwayat SELALU berselang-seling antara 'user' dan 'model'.
-    Jika ada 2 pesan berurutan dengan peran sama, teks digabungkan.
+    Dibatasi maksimal 10 pesan terakhir (5 putaran percakapan) untuk efisiensi prompt.
     """
     if not history:
         return []
 
+    # Potong maksimal 10 pesan terakhir (5 putaran)
+    recent_history = history[-10:]
+
     cleaned = []
-    for msg in history:
+    for msg in recent_history:
         role = msg.get("role", "user")
         text = msg.get("text", "").strip()
 
         if not text:
             continue
 
-        # Normalisasi role
         role = "user" if role != "model" else "model"
 
         if cleaned and cleaned[-1]["role"] == role:
-            # Penggabungan teks jika role berturut-turut sama
             cleaned[-1]["parts"][0]["text"] += f"\n{text}"
         else:
             cleaned.append({
@@ -95,8 +97,6 @@ def _format_history_for_gemini(history: list[dict]) -> list[dict]:
                 "parts": [{"text": text}],
             })
 
-    # Jika item terakhir di cleaned adalah 'user', hapus agar pesan user baru yang akan di-append
-    # tidak menghasilkan 2 'user' berturut-turut
     if cleaned and cleaned[-1]["role"] == "user":
         cleaned.pop()
 
@@ -104,21 +104,17 @@ def _format_history_for_gemini(history: list[dict]) -> list[dict]:
 
 
 async def _execute_function_call(
-    function_call: Any, chat_id: int
+    func_name: str, func_args: dict, chat_id: int
 ) -> dict[str, Any]:
     """
     Execute sebuah function call dari Gemini dan return hasilnya.
     """
-    func_name = function_call.name
-    func_args = dict(function_call.args) if function_call.args else {}
-
     logger.info("Executing function call: %s with args: %s", func_name, func_args)
 
     executor = TOOL_EXECUTORS.get(func_name)
     if not executor:
         return {"error": f"Unknown function: {func_name}"}
 
-    # Untuk journal functions, inject chat_id
     if func_name in ("save_journal_entry", "get_journal_recap"):
         func_args["chat_id"] = chat_id
         if func_name == "save_journal_entry":
@@ -149,9 +145,7 @@ async def _update_memory(
     Hanya dipanggil sesekali untuk menjaga efisiensi.
     """
     try:
-        _configure_gemini()
-        model = genai.GenerativeModel(GEMINI_MODEL)
-
+        client = _get_client()
         memory_prompt = f"""Kamu adalah asisten yang bertugas merangkum informasi penting dari percakapan.
 
 Memori sebelumnya:
@@ -165,20 +159,24 @@ Tugas: Perbarui ringkasan memori dengan menambahkan informasi baru yang penting 
 
 Format output: langsung tuliskan ringkasan memori tanpa prefix atau label."""
 
-        response = model.generate_content(memory_prompt)
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model=GEMINI_MODEL,
+            contents=memory_prompt,
+        )
         if response and response.text:
             await save_memory(chat_id, response.text.strip())
     except Exception as e:
         logger.error("Failed to update memory: %s", str(e))
 
 
-# Model kandidat untuk rotasi & fallback otomatis jika salah satu model terkena 429/404/quota limit
+# Model kandidat untuk rotasi & fallback otomatis
 DEFAULT_MODEL_CANDIDATES = [
-    "gemini-flash-latest",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
     "gemini-flash-lite-latest",
-    "gemini-pro-latest",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-flash-latest",
+    "gemini-2.0-flash-lite",
 ]
 
 
@@ -195,27 +193,39 @@ def _get_model_candidates() -> list[str]:
 
 
 async def _generate_content_with_fallback(
-    system_prompt: str, tools: list[genai.types.Tool], contents: Any
+    system_prompt: str,
+    tools: Optional[list[types.Tool]],
+    contents: Any,
+    timeout_seconds: float = 8.0,
 ) -> tuple[Any, str, int]:
     """
-    Memanggil model.generate_content dengan rotasi & fallback otomatis antar model kandidat.
-    Jika satu model gagal (404/429/Rate Limit/Quota), otomatis mencoba model cadangan berikutnya.
+    Memanggil client.models.generate_content dengan rotasi & fallback otomatis antar model kandidat.
+    Dilengkapi timeout (default 8 detik) menggunakan asyncio.wait_for.
     Returns: (response, used_model_name, total_tokens)
     """
     candidates = _get_model_candidates()
+    client = _get_client()
+    config = types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        tools=tools if tools else None,
+        temperature=0.7,
+    )
     last_exception = None
 
     for model_name in candidates:
         try:
-            model = genai.GenerativeModel(
-                model_name,
-                system_instruction=system_prompt,
-                tools=tools,
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.models.generate_content,
+                    model=model_name,
+                    contents=contents,
+                    config=config,
+                ),
+                timeout=timeout_seconds,
             )
-            response = await asyncio.to_thread(model.generate_content, contents)
             logger.info("Successfully generated content using model: %s", model_name)
 
-            # Ekstrak usage_metadata untuk tracking token
+            # Token calculation
             total_tokens = 0
             if hasattr(response, "usage_metadata") and response.usage_metadata:
                 meta = response.usage_metadata
@@ -224,13 +234,21 @@ async def _generate_content_with_fallback(
                     + getattr(meta, "candidates_token_count", 0)
                 )
 
-            # Fallback estimasi jika API tidak mengembalikan token count (misal 1 token ≈ 4 karakter)
             if total_tokens == 0:
                 prompt_len = sum(len(str(c)) for c in contents) if isinstance(contents, list) else len(str(contents))
                 resp_len = len(response.text) if hasattr(response, "text") and response.text else 100
                 total_tokens = max(15, (prompt_len + resp_len) // 4)
 
             return response, model_name, total_tokens
+
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Model %s timed out after %s seconds. Falling back to next model...",
+                model_name,
+                timeout_seconds,
+            )
+            last_exception = TimeoutError(f"Model {model_name} timed out")
+            continue
         except Exception as e:
             logger.warning(
                 "Model %s failed (%s). Falling back to next candidate model...",
@@ -246,89 +264,67 @@ async def _generate_content_with_fallback(
 
 
 async def chat_with_oline(
-    chat_id: int, user_message: str, user_name: str = "Teman"
+    chat_id: int,
+    user_message: str,
+    user_name: str = "Teman",
+    intent: Optional[str] = None,
 ) -> str:
     """
     Main function untuk chat dengan Oline.
-    Mengelola seluruh alur: memori, riwayat, function calling, dan respons.
-
-    Args:
-        chat_id: Telegram chat ID pengguna
-        user_message: Pesan teks dari pengguna
-        user_name: Nama pengguna dari profil Telegram
-
-    Returns:
-        Respons teks dari Oline
+    Mengelola alur: intent tool filter, memori, riwayat, function calling, dan timeout fast/slow path.
     """
     try:
-        _configure_gemini()
-
         # 1. Ambil memori dan riwayat
         memory = await get_memory(chat_id)
         history = await get_history(chat_id)
 
-        # 2. Build system prompt dengan user_name
+        # 2. Build system prompt
         system_prompt = _build_system_prompt(memory, user_name=user_name)
 
-        # 3. Buat tools
-        tools = _build_tools()
+        # 3. Buat tools yang terfilter sesuai intent (Fast Path: tools = None)
+        tool_declarations = get_tools_for_intent(intent)
+        tools = _build_tools(tool_declarations)
 
-        # 4. Siapkan conversation contents
+        # 4. Siapkan contents (riwayat dibatasi maks 10 pesan)
         contents = _format_history_for_gemini(history)
         contents.append({
             "role": "user",
             "parts": [{"text": user_message}],
         })
 
-        # 5. Generate response (mungkin function call) dengan automatic fallback
+        # 5. Generate response (dengan timeout 8 detik & automatic fallback)
         response, used_model, tokens_used = await _generate_content_with_fallback(
-            system_prompt, tools, contents
+            system_prompt, tools, contents, timeout_seconds=8.0
         )
-
-        # Track token usage
         total_tokens_session = tokens_used
 
-        # 6. Handle function calling loop
-        max_iterations = 3  # Batas safety untuk loop function calling
+        # 6. Handle function calling loop jika ada
+        max_iterations = 3
         iteration = 0
 
         while iteration < max_iterations:
             iteration += 1
 
-            # Cek apakah ada function call
-            if not response.candidates:
+            if not hasattr(response, "function_calls") or not response.function_calls:
                 break
 
-            candidate = response.candidates[0]
+            if response.candidates and len(response.candidates) > 0:
+                contents.append(response.candidates[0].content)
 
-            # Cek function call di parts
-            has_function_call = False
             function_responses = []
-
-            for part in candidate.content.parts:
-                if hasattr(part, "function_call") and part.function_call:
-                    has_function_call = True
-                    fc = part.function_call
-
-                    # Execute function
-                    result = await _execute_function_call(fc, chat_id)
-
-                    function_responses.append(
-                        glm.Part(
-                            function_response=glm.FunctionResponse(
-                                name=fc.name,
-                                response=result,
-                            )
-                        )
+            for fc in response.function_calls:
+                func_name = fc.name
+                func_args = dict(fc.args) if fc.args else {}
+                result = await _execute_function_call(func_name, func_args, chat_id)
+                function_responses.append(
+                    types.Part.from_function_response(
+                        name=func_name,
+                        response=result,
                     )
+                )
 
-            if not has_function_call:
-                break
-
-            # Tambahkan response model + function results ke contents (dengan role='user')
-            contents.append(candidate.content)
             contents.append(
-                glm.Content(
+                types.Content(
                     role="user",
                     parts=function_responses,
                 )
@@ -336,21 +332,23 @@ async def chat_with_oline(
 
             # Generate lagi dengan function results
             response, used_model, tokens_used = await _generate_content_with_fallback(
-                system_prompt, tools, contents
+                system_prompt, tools, contents, timeout_seconds=8.0
             )
             total_tokens_session += tokens_used
 
         # 7. Extract final text response
         bot_response = ""
-        if response.candidates:
+        if hasattr(response, "text") and response.text:
+            bot_response = response.text
+        elif response.candidates:
             for part in response.candidates[0].content.parts:
                 if hasattr(part, "text") and part.text:
                     bot_response += part.text
 
         if not bot_response:
-            bot_response = "hmm, aku lagi error nih. coba lagi nanti ya 😅"
+            bot_response = "hmm, aku lagi agak bingung nih. coba lagi nanti ya 😅"
 
-        # 8. Update riwayat percakapan (hanya jika sukses dan tidak error)
+        # 8. Update riwayat percakapan
         if "masalah teknis" not in bot_response and "error nih" not in bot_response:
             history.append({"role": "user", "text": user_message})
             history.append({"role": "model", "text": bot_response})
@@ -372,4 +370,4 @@ async def chat_with_oline(
             or "rate limit" in err_msg.lower()
         ):
             return "aduh, trafik server AI lagi penuh banget nih 😅 coba kirim pesan lagi sebentar ya!"
-        return "aduh maaf, aku lagi ada masalah teknis nih 😅 coba lagi nanti ya!"
+        return "aduh maaf, aku lagi agak ngelag nih 😅 coba lagi nanti ya!"

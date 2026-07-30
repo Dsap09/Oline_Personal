@@ -185,10 +185,34 @@ TOOL_DECLARATIONS = [
     },
 ]
 
+TOOLS_BY_INTENT = {
+    "cuaca": ["get_weather_forecast"],
+    "rekomendasi": ["get_movie_recommendation", "get_music_recommendation"],
+    "suara": ["send_voice_message"],
+    "jurnal": ["save_journal_entry", "get_journal_recap"],
+    "kuota": ["check_quota"],
+}
+
+
+def get_tools_for_intent(intent: Optional[str]) -> list[dict]:
+    """
+    Mengembalikan deklarasi tool yang terfilter sesuai intent pengguna.
+    Jika intent None (Fast Path), mengembalikan list kosong [].
+    """
+    if not intent:
+        return []
+
+    allowed_names = set(TOOLS_BY_INTENT.get(intent, []))
+    if not allowed_names:
+        return []
+
+    return [decl for decl in TOOL_DECLARATIONS if decl["name"] in allowed_names]
+
 
 # ============================================================
 # Tool Executor Functions
 # ============================================================
+
 
 
 async def get_movie_recommendation(

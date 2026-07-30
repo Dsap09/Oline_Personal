@@ -134,12 +134,33 @@ async def handle_jurnal_command(
         )
 
 
+HEAVY_KEYWORDS = {
+    "cuaca": ["cuaca", "hujan", "panas", "suhu", "cerah"],
+    "rekomendasi": ["rekomendasi", "film", "lagu", "buku", "seri", "anime"],
+    "suara": ["suara", "nyanyi", "gombal", "puisi", "bacain", "baca"],
+    "jurnal": ["jurnal", "catat", "rekap jurnal"],
+    "kuota": ["kuota", "token", "quota"],
+}
+
+
+def detect_intent(text: str) -> str | None:
+    """
+    Mendeteksi apakah pesan pengguna membutuhkan tools (heavy intent).
+    Jika tidak ada kata kunci yang cocok, mengembalikan None (Fast Path).
+    """
+    text_lower = text.lower()
+    for intent, keywords in HEAVY_KEYWORDS.items():
+        if any(kw in text_lower for kw in keywords):
+            return intent
+    return None
+
+
 async def handle_message(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """
     Handler utama untuk semua pesan teks biasa.
-    Meneruskan pesan ke Gemini pipeline untuk diproses.
+    Meneruskan pesan ke Gemini pipeline untuk diproses (Fast Path vs Slow Path).
     """
     if not update.effective_chat or not update.message or not update.message.text:
         return
@@ -157,16 +178,20 @@ async def handle_message(
         )
         return
 
-    # Kirim "typing" action
-    await update.effective_chat.send_action("typing")
+    # Deteksi intent untuk menentukan Fast Path / Slow Path
+    intent = detect_intent(user_message)
+
+    # Kirim "typing" action HANYA untuk Slow Path (fitur berat) untuk memangkas latensi Fast Path
+    if intent is not None:
+        await update.effective_chat.send_action("typing")
 
     # Ambil nama pengguna dari Telegram
     user_name = "Teman"
     if update.effective_user and update.effective_user.first_name:
         user_name = update.effective_user.first_name
 
-    # Proses lewat Gemini
-    response = await chat_with_oline(chat_id, user_message, user_name=user_name)
+    # Proses lewat Gemini (Fast Path tanpa tools jika intent=None)
+    response = await chat_with_oline(chat_id, user_message, user_name=user_name, intent=intent)
 
     # Kirim respons (split jika terlalu panjang)
     if len(response) > 4096:
@@ -176,3 +201,4 @@ async def handle_message(
             await update.effective_chat.send_message(chunk)
     else:
         await update.effective_chat.send_message(response)
+
