@@ -13,6 +13,15 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# Prefix keys
+MEMORY_PREFIX = "memory"
+JOURNAL_PREFIX = "jurnal"
+HISTORY_PREFIX = "history"
+RATE_PREFIX = "rate"
+USAGE_PREFIX = "gemini_usage"
+TTS_PREFIX = "tts_usage"
+
+
 def _get_kv_credentials() -> tuple[str, str]:
     """Mengambil credentials Upstash Redis / Vercel KV dari environment variables."""
     raw_url = os.environ.get("KV_REST_API_URL") or os.environ.get("UPSTASH_REDIS_REST_URL", "")
