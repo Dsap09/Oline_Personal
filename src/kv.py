@@ -15,9 +15,11 @@ logger = logging.getLogger(__name__)
 
 def _get_kv_credentials() -> tuple[str, str]:
     """Mengambil credentials Upstash Redis / Vercel KV dari environment variables."""
-    url = os.environ.get("KV_REST_API_URL") or os.environ.get("UPSTASH_REDIS_REST_URL", "")
-    token = os.environ.get("KV_REST_API_TOKEN") or os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
-    return url.rstrip("/"), token
+    raw_url = os.environ.get("KV_REST_API_URL") or os.environ.get("UPSTASH_REDIS_REST_URL", "")
+    raw_token = os.environ.get("KV_REST_API_TOKEN") or os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
+    url = raw_url.strip().rstrip("/")
+    token = raw_token.strip()
+    return url, token
 
 
 async def _kv_request(command: list[str]) -> dict | None:
@@ -38,7 +40,7 @@ async def _kv_request(command: list[str]) -> dict | None:
     payload = [command]
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=3.0) as client:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
             result = response.json()
@@ -46,11 +48,8 @@ async def _kv_request(command: list[str]) -> dict | None:
             if isinstance(result, list) and len(result) > 0:
                 return result[0]
             return result
-    except httpx.HTTPStatusError as e:
-        logger.error("KV HTTP error: %s", e.response.status_code)
-        return None
-    except httpx.RequestError as e:
-        logger.error("KV request error: %s", str(e))
+    except Exception as e:
+        logger.error("KV operation error: %s", str(e))
         return None
 
 

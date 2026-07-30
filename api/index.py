@@ -27,16 +27,15 @@ WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 
 def run_async(coro):
     """Run async coroutine safely on Vercel Serverless."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_closed():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-    return loop.run_until_complete(coro)
+        return loop.run_until_complete(coro)
+    finally:
+        try:
+            loop.close()
+        except Exception:
+            pass
 
 
 async def _process_update(update_data: dict) -> None:
