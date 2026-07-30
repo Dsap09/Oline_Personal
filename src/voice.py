@@ -38,9 +38,14 @@ async def send_chat_action_record_voice(chat_id: int) -> bool:
         return False
 
 
+DEFAULT_PREMADE_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"  # Rachel (Free premade voice)
+
+
 async def generate_elevenlabs_tts(text: str) -> bytes:
     """
     Mengubah teks menjadi audio menggunakan ElevenLabs Text-to-Speech API.
+    Memiliki fallback otomatis ke suara premade gratis (Rachel) jika Voice ID
+    pilihan memerlukan akun berbayar (HTTP 402).
     Returns: byte audio (MP3).
     """
     if not ELEVENLABS_API_KEY:
@@ -48,16 +53,14 @@ async def generate_elevenlabs_tts(text: str) -> bytes:
             "ELEVENLABS_API_KEY tidak dikonfigurasi. Mohon isi di environment variables."
         )
 
-    voice_id = ELEVENLABS_VOICE_ID or "21m00Tcm4TlvDq8ikWAM"
-    url = f"{ELEVENLABS_TTS_URL}/{voice_id}"
+    voice_id = ELEVENLABS_VOICE_ID or DEFAULT_PREMADE_VOICE_ID
+    model_id = os.environ.get("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
 
     headers = {
         "Accept": "audio/mpeg",
         "Content-Type": "application/json",
         "xi-api-key": ELEVENLABS_API_KEY,
     }
-
-    model_id = os.environ.get("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
 
     payload = {
         "text": text,
@@ -69,7 +72,18 @@ async def generate_elevenlabs_tts(text: str) -> bytes:
     }
 
     async with httpx.AsyncClient(timeout=15.0) as client:
+        url = f"{ELEVENLABS_TTS_URL}/{voice_id}"
         response = await client.post(url, headers=headers, json=payload)
+
+        # Jika mendapat error 402 (library voice butuh paid plan) dan voice_id yang dipakai bukan default
+        if response.status_code == 402 and voice_id != DEFAULT_PREMADE_VOICE_ID:
+            logger.warning(
+                "Voice ID '%s' memerlukan akun ElevenLabs berbayar. Menggunakan fallback ke suara premade gratis (Rachel)...",
+                voice_id,
+            )
+            fallback_url = f"{ELEVENLABS_TTS_URL}/{DEFAULT_PREMADE_VOICE_ID}"
+            response = await client.post(fallback_url, headers=headers, json=payload)
+
         if response.status_code != 200:
             logger.error(
                 "ElevenLabs API error (Status %d): %s",
@@ -79,6 +93,7 @@ async def generate_elevenlabs_tts(text: str) -> bytes:
             raise RuntimeError(
                 f"Gagal menghasilkan suara dari ElevenLabs API (Status {response.status_code})."
             )
+
         return response.content
 
 
