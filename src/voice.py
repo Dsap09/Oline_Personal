@@ -57,9 +57,11 @@ async def generate_elevenlabs_tts(text: str) -> bytes:
         "xi-api-key": ELEVENLABS_API_KEY,
     }
 
+    model_id = os.environ.get("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2")
+
     payload = {
         "text": text,
-        "model_id": "eleven_monolingual_v1",
+        "model_id": model_id,
         "voice_settings": {
             "stability": 0.5,
             "similarity_boost": 0.5,
