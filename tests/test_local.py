@@ -54,6 +54,19 @@ async def main():
     else:
         print(f"   [FAIL] {movie_res}")
 
+    # 4. ElevenLabs TTS Test
+    print("\n4. Testing ElevenLabs TTS API...")
+    eleven_key = os.environ.get("ELEVENLABS_API_KEY", "")
+    if eleven_key:
+        from src.voice import generate_elevenlabs_tts
+        try:
+            audio_bytes = await generate_elevenlabs_tts("Halo, aku Oline!")
+            print(f"   [SUCCESS] ElevenLabs TTS generated {len(audio_bytes)} bytes of audio!")
+        except Exception as e:
+            print(f"   [FAIL] ElevenLabs TTS error: {e}")
+    else:
+        print("   [SKIPPED] ELEVENLABS_API_KEY environment variable is not set.")
+
     print("\n=== Test Completed ===")
 
 

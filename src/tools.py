@@ -11,8 +11,19 @@ from typing import Any, Optional
 
 import httpx
 
-from src.kv import get_journal_entries, get_today_usage, save_journal
+from src.kv import (
+    get_journal_entries,
+    get_monthly_tts_usage,
+    get_today_usage,
+    save_journal,
+    save_tts_usage,
+)
 from src.utils import format_date_indonesian, parse_relative_date
+from src.voice import (
+    generate_elevenlabs_tts,
+    send_chat_action_record_voice,
+    send_voice_note_to_telegram,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +164,23 @@ TOOL_DECLARATIONS = [
             "type": "object",
             "properties": {},
             "required": [],
+        },
+    },
+    {
+        "name": "send_voice_message",
+        "description": (
+            "Mengirim pesan suara (voice note) ketika pengguna meminta Oline "
+            "bernyanyi, membaca puisi, menggombal dengan suara, atau mengucapkan sesuatu dengan suara."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "Teks kalimat, lirik, atau puisi yang akan diucapkan Oline dengan suara.",
+                },
+            },
+            "required": ["text"],
         },
     },
 ]
@@ -443,6 +471,65 @@ async def execute_check_quota(chat_id: int) -> dict[str, Any]:
     }
 
 
+async def execute_send_voice_message(chat_id: int, text: str) -> dict[str, Any]:
+    """
+    Mengirim pesan suara (voice note) dengan suara ElevenLabs TTS.
+    Memeriksa kuota gratis bulanan (10.000 karakter/bulan).
+    """
+    MONTHLY_CHAR_LIMIT = 10_000
+
+    if not text or not text.strip():
+        return {"error": "Teks untuk voice message kosong."}
+
+    char_count = len(text)
+
+    # 1. Cek kuota bulanan
+    used_chars = await get_monthly_tts_usage(chat_id)
+    if used_chars + char_count > MONTHLY_CHAR_LIMIT:
+        return {
+            "quota_exceeded": True,
+            "message": (
+                "Aduh, suara Oline bulan ini udah abis, bestie. "
+                "Tunggu bulan depan ya, atau kita ngobrol teks aja dulu~ 😘"
+            ),
+        }
+
+    # 2. Kirim chat action "record_voice" agar Telegram menampilkan indikator merekam
+    await send_chat_action_record_voice(chat_id)
+
+    # 3. Generate audio via ElevenLabs
+    try:
+        audio_bytes = await generate_elevenlabs_tts(text)
+    except Exception as e:
+        logger.error("Failed to generate TTS: %s", str(e))
+        return {
+            "error": "Failed to generate TTS audio",
+            "message": f"Aduh, maaf ya, Oline lagi gagu nih 😅 Gagal bikin suaranya ({str(e)}).",
+        }
+
+    # 4. Simpan pemakaian karakter ke KV
+    await save_tts_usage(chat_id, char_count)
+
+    # 5. Kirim voice note ke Telegram
+    sent = await send_voice_note_to_telegram(
+        chat_id=chat_id,
+        audio_bytes=audio_bytes,
+        caption="🎙️ dari Oline, spesial buat kamu~",
+    )
+
+    if sent:
+        return {
+            "status": "success",
+            "text": text,
+            "message": "Voice note berhasil dikirim langsung ke chat Telegram pengguna.",
+        }
+    else:
+        return {
+            "error": "Failed to send voice to Telegram",
+            "message": "Gagal mengirimkan voice note ke Telegram 😢 Coba lagi nanti ya.",
+        }
+
+
 # Map nama tool ke executor function
 TOOL_EXECUTORS = {
     "get_movie_recommendation": get_movie_recommendation,
@@ -451,4 +538,5 @@ TOOL_EXECUTORS = {
     "save_journal_entry": execute_save_journal,
     "get_journal_recap": execute_get_journal_recap,
     "check_quota": execute_check_quota,
+    "send_voice_message": execute_send_voice_message,
 }

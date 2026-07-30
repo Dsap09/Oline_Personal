@@ -135,6 +135,8 @@ async def _execute_function_call(
             )
     elif func_name == "check_quota":
         return await executor(chat_id=chat_id)
+    elif func_name == "send_voice_message":
+        return await executor(chat_id=chat_id, text=func_args.get("text", ""))
     else:
         return await executor(**func_args)
 

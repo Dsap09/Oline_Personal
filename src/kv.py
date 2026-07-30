@@ -23,6 +23,7 @@ JOURNAL_PREFIX = "jurnal"
 HISTORY_PREFIX = "history"
 RATE_PREFIX = "rate"
 USAGE_PREFIX = "gemini_usage"
+TTS_PREFIX = "tts_usage"
 
 
 async def _kv_request(command: list[str]) -> dict | None:
@@ -203,6 +204,43 @@ async def get_today_usage(chat_id: int) -> int:
     """
     date_str = datetime.now().strftime("%Y-%m-%d")
     key = f"{USAGE_PREFIX}:{chat_id}:{date_str}"
+
+    result = await _kv_request(["GET", key])
+    if result and result.get("result"):
+        try:
+            return int(result["result"])
+        except (ValueError, TypeError):
+            return 0
+    return 0
+
+
+# --- ElevenLabs TTS Usage Tracking ---
+
+async def save_tts_usage(chat_id: int, char_count: int) -> bool:
+    """
+    Menambahkan jumlah karakter TTS terpakai bulan ini ke Vercel KV.
+    Key format: tts_usage:<chat_id>:YYYY-MM
+    TTL 60 hari (5184000 detik).
+    """
+    if char_count <= 0:
+        return True
+
+    month_str = datetime.now().strftime("%Y-%m")
+    key = f"{TTS_PREFIX}:{chat_id}:{month_str}"
+
+    result = await _kv_request(["INCRBY", key, str(char_count)])
+    if result is not None:
+        await _kv_request(["EXPIRE", key, "5184000"])
+        return True
+    return False
+
+
+async def get_monthly_tts_usage(chat_id: int) -> int:
+    """
+    Mengambil total karakter TTS terpakai bulan ini untuk chat_id tertentu.
+    """
+    month_str = datetime.now().strftime("%Y-%m")
+    key = f"{TTS_PREFIX}:{chat_id}:{month_str}"
 
     result = await _kv_request(["GET", key])
     if result and result.get("result"):
