@@ -172,11 +172,12 @@ Format output: langsung tuliskan ringkasan memori tanpa prefix atau label."""
         logger.error("Failed to update memory: %s", str(e))
 
 
-# Model kandidat untuk rotasi & fallback otomatis jika salah satu model terkena 429/quota limit
+# Model kandidat untuk rotasi & fallback otomatis jika salah satu model terkena 429/404/quota limit
 DEFAULT_MODEL_CANDIDATES = [
-    "gemini-1.5-flash",
     "gemini-2.0-flash",
-    "gemini-1.5-pro",
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-pro-latest",
+    "gemini-1.5-flash",
 ]
 
 
@@ -197,7 +198,7 @@ async def _generate_content_with_fallback(
 ) -> tuple[Any, str, int]:
     """
     Memanggil model.generate_content dengan rotasi & fallback otomatis antar model kandidat.
-    Jika satu model terkena 429 / Rate Limit / Quota Exceeded, otomatis mencoba model cadangan berikutnya.
+    Jika satu model gagal (404/429/Rate Limit/Quota), otomatis mencoba model cadangan berikutnya.
     Returns: (response, used_model_name, total_tokens)
     """
     candidates = _get_model_candidates()
@@ -230,23 +231,13 @@ async def _generate_content_with_fallback(
 
             return response, model_name, total_tokens
         except Exception as e:
-            err_msg = str(e).lower()
-            last_exception = e
-            is_rate_limit = (
-                "429" in err_msg
-                or "resourceexhausted" in err_msg
-                or "quota exceeded" in err_msg
-                or "rate limit" in err_msg
+            logger.warning(
+                "Model %s failed (%s). Falling back to next candidate model...",
+                model_name,
+                str(e),
             )
-            if is_rate_limit:
-                logger.warning(
-                    "Model %s failed with rate limit/quota (%s). Falling back to next model candidate...",
-                    model_name,
-                    str(e),
-                )
-                continue
-            else:
-                raise e
+            last_exception = e
+            continue
 
     if last_exception:
         raise last_exception
