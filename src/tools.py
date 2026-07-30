@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 import httpx
 
-from src.kv import get_journal_entries, save_journal
+from src.kv import get_journal_entries, get_today_usage, save_journal
 from src.utils import format_date_indonesian, parse_relative_date
 
 logger = logging.getLogger(__name__)
@@ -139,6 +139,19 @@ TOOL_DECLARATIONS = [
                     "description": "Tanggal akhir rentang (YYYY-MM-DD). Default hari ini.",
                 },
             },
+            "required": [],
+        },
+    },
+    {
+        "name": "check_quota",
+        "description": (
+            "Mengecek sisa kuota token Gemini API hari ini. "
+            "Gunakan saat pengguna bertanya tentang kuota, sisa token, "
+            "pemakaian API, atau berapa banyak token yang sudah terpakai hari ini."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
             "required": [],
         },
     },
@@ -410,6 +423,26 @@ async def execute_get_journal_recap(
     return {"entries": formatted, "total_entries": len(formatted)}
 
 
+async def execute_check_quota(chat_id: int) -> dict[str, Any]:
+    """
+    Mengecek pemakaian token Gemini API hari ini dan menghitung sisa kuota.
+    Kuota harian free tier: 1.000.000 token.
+    """
+    DAILY_TOKEN_LIMIT = 1_000_000
+
+    tokens_used = await get_today_usage(chat_id)
+    tokens_remaining = max(0, DAILY_TOKEN_LIMIT - tokens_used)
+    usage_percent = round((tokens_used / DAILY_TOKEN_LIMIT) * 100, 1)
+
+    return {
+        "date": format_date_indonesian(datetime.now().strftime("%Y-%m-%d")),
+        "tokens_used": tokens_used,
+        "tokens_remaining": tokens_remaining,
+        "daily_limit": DAILY_TOKEN_LIMIT,
+        "usage_percent": usage_percent,
+    }
+
+
 # Map nama tool ke executor function
 TOOL_EXECUTORS = {
     "get_movie_recommendation": get_movie_recommendation,
@@ -417,4 +450,5 @@ TOOL_EXECUTORS = {
     "get_weather_forecast": get_weather_forecast,
     "save_journal_entry": execute_save_journal,
     "get_journal_recap": execute_get_journal_recap,
+    "check_quota": execute_check_quota,
 }

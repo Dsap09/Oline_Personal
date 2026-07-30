@@ -22,6 +22,7 @@ MEMORY_PREFIX = "memory"
 JOURNAL_PREFIX = "jurnal"
 HISTORY_PREFIX = "history"
 RATE_PREFIX = "rate"
+USAGE_PREFIX = "gemini_usage"
 
 
 async def _kv_request(command: list[str]) -> dict | None:
@@ -169,6 +170,47 @@ async def get_journal_entries(
         current += timedelta(days=1)
 
     return entries
+
+
+# --- Gemini Usage Tracking ---
+
+async def save_usage(chat_id: int, tokens: int) -> bool:
+    """
+    Menambahkan jumlah token terpakai hari ini ke Vercel KV.
+    Key format: gemini_usage:<chat_id>:YYYY-MM-DD
+    Menggunakan INCRBY untuk operasi atomik.
+    TTL 48 jam (172800 detik) agar key otomatis expired keesokan harinya.
+    """
+    if tokens <= 0:
+        return True
+
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    key = f"{USAGE_PREFIX}:{chat_id}:{date_str}"
+
+    # INCRBY secara atomik menambahkan nilai (membuat key jika belum ada)
+    result = await _kv_request(["INCRBY", key, str(tokens)])
+    if result is not None:
+        # Set TTL agar key auto-expire (tidak menumpuk selamanya)
+        await _kv_request(["EXPIRE", key, "172800"])
+        return True
+    return False
+
+
+async def get_today_usage(chat_id: int) -> int:
+    """
+    Mengambil total token yang terpakai hari ini untuk chat_id tertentu.
+    Returns 0 jika belum ada data.
+    """
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    key = f"{USAGE_PREFIX}:{chat_id}:{date_str}"
+
+    result = await _kv_request(["GET", key])
+    if result and result.get("result"):
+        try:
+            return int(result["result"])
+        except (ValueError, TypeError):
+            return 0
+    return 0
 
 
 # --- Rate Limiting ---

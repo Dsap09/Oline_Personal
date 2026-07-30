@@ -13,7 +13,7 @@ from typing import Any, Optional
 import google.ai.generativelanguage as glm
 import google.generativeai as genai
 
-from src.kv import get_history, get_memory, save_history, save_memory
+from src.kv import get_history, get_memory, save_history, save_memory, save_usage
 from src.personas import (
     MEMORY_INJECTION_TEMPLATE,
     OLINE_SYSTEM_PROMPT,
@@ -133,6 +133,8 @@ async def _execute_function_call(
                 start_date=func_args.get("start_date"),
                 end_date=func_args.get("end_date"),
             )
+    elif func_name == "check_quota":
+        return await executor(chat_id=chat_id)
     else:
         return await executor(**func_args)
 
@@ -209,7 +211,13 @@ async def _generate_content_with_fallback(
             )
             response = await asyncio.to_thread(model.generate_content, contents)
             logger.info("Successfully generated content using model: %s", model_name)
-            return response, model_name
+
+            # Ekstrak usage_metadata untuk tracking token
+            total_tokens = 0
+            if hasattr(response, "usage_metadata") and response.usage_metadata:
+                total_tokens = getattr(response.usage_metadata, "total_token_count", 0)
+
+            return response, model_name, total_tokens
         except Exception as e:
             err_msg = str(e).lower()
             last_exception = e
@@ -271,9 +279,12 @@ async def chat_with_oline(
         })
 
         # 5. Generate response (mungkin function call) dengan automatic fallback
-        response, used_model = await _generate_content_with_fallback(
+        response, used_model, tokens_used = await _generate_content_with_fallback(
             system_prompt, tools, contents
         )
+
+        # Track token usage
+        total_tokens_session = tokens_used
 
         # 6. Handle function calling loop
         max_iterations = 3  # Batas safety untuk loop function calling
@@ -322,9 +333,10 @@ async def chat_with_oline(
             )
 
             # Generate lagi dengan function results
-            response, used_model = await _generate_content_with_fallback(
+            response, used_model, tokens_used = await _generate_content_with_fallback(
                 system_prompt, tools, contents
             )
+            total_tokens_session += tokens_used
 
         # 7. Extract final text response
         bot_response = ""
@@ -341,6 +353,10 @@ async def chat_with_oline(
             history.append({"role": "user", "text": user_message})
             history.append({"role": "model", "text": bot_response})
             await save_history(chat_id, history)
+
+        # 9. Simpan pemakaian token ke KV
+        if total_tokens_session > 0:
+            await save_usage(chat_id, total_tokens_session)
 
         return bot_response
 
