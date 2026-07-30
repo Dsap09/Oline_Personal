@@ -174,10 +174,9 @@ Format output: langsung tuliskan ringkasan memori tanpa prefix atau label."""
 
 # Model kandidat untuk rotasi & fallback otomatis jika salah satu model terkena 429/quota limit
 DEFAULT_MODEL_CANDIDATES = [
-    "gemini-3.6-flash",
+    "gemini-1.5-flash",
     "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-flash-latest",
+    "gemini-1.5-pro",
 ]
 
 
@@ -195,11 +194,11 @@ def _get_model_candidates() -> list[str]:
 
 async def _generate_content_with_fallback(
     system_prompt: str, tools: list[genai.types.Tool], contents: Any
-) -> tuple[Any, str]:
+) -> tuple[Any, str, int]:
     """
     Memanggil model.generate_content dengan rotasi & fallback otomatis antar model kandidat.
     Jika satu model terkena 429 / Rate Limit / Quota Exceeded, otomatis mencoba model cadangan berikutnya.
-    Returns: (response, used_model_name)
+    Returns: (response, used_model_name, total_tokens)
     """
     candidates = _get_model_candidates()
     last_exception = None
@@ -217,7 +216,17 @@ async def _generate_content_with_fallback(
             # Ekstrak usage_metadata untuk tracking token
             total_tokens = 0
             if hasattr(response, "usage_metadata") and response.usage_metadata:
-                total_tokens = getattr(response.usage_metadata, "total_token_count", 0)
+                meta = response.usage_metadata
+                total_tokens = getattr(meta, "total_token_count", 0) or (
+                    getattr(meta, "prompt_token_count", 0)
+                    + getattr(meta, "candidates_token_count", 0)
+                )
+
+            # Fallback estimasi jika API tidak mengembalikan token count (misal 1 token ≈ 4 karakter)
+            if total_tokens == 0:
+                prompt_len = sum(len(str(c)) for c in contents) if isinstance(contents, list) else len(str(contents))
+                resp_len = len(response.text) if hasattr(response, "text") and response.text else 100
+                total_tokens = max(15, (prompt_len + resp_len) // 4)
 
             return response, model_name, total_tokens
         except Exception as e:
@@ -225,10 +234,9 @@ async def _generate_content_with_fallback(
             last_exception = e
             is_rate_limit = (
                 "429" in err_msg
-                or "quota" in err_msg
-                or "rate" in err_msg
                 or "resourceexhausted" in err_msg
-                or "404" in err_msg
+                or "quota exceeded" in err_msg
+                or "rate limit" in err_msg
             )
             if is_rate_limit:
                 logger.warning(
@@ -367,9 +375,9 @@ async def chat_with_oline(
         logger.error("Error in chat_with_oline: %s", err_msg, exc_info=True)
         if (
             "429" in err_msg
-            or "quota" in err_msg.lower()
-            or "rate" in err_msg.lower()
             or "resourceexhausted" in err_msg.lower()
+            or "quota exceeded" in err_msg.lower()
+            or "rate limit" in err_msg.lower()
         ):
             return "aduh, trafik server AI lagi penuh banget nih 😅 coba kirim pesan lagi sebentar ya!"
         return "aduh maaf, aku lagi ada masalah teknis nih 😅 coba lagi nanti ya!"
