@@ -4,6 +4,7 @@ Mencakup: rekomendasi film (TMDb), rekomendasi musik (iTunes),
 cuaca (OpenWeatherMap), dan jurnal harian (Vercel KV).
 """
 
+import asyncio
 import logging
 import os
 from datetime import datetime
@@ -183,6 +184,24 @@ TOOL_DECLARATIONS = [
             "required": ["text"],
         },
     },
+    {
+        "name": "search_internet",
+        "description": (
+            "Cari informasi terkini di internet. Gunakan saat pengguna bertanya "
+            "hal yang memerlukan data real-time, berita, fakta terbaru, definisi, "
+            "atau informasi di luar pengetahuan umum yang kamu miliki."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Kata kunci pencarian yang ingin dicari di internet.",
+                }
+            },
+            "required": ["query"],
+        },
+    },
 ]
 
 TOOLS_BY_INTENT = {
@@ -191,6 +210,7 @@ TOOLS_BY_INTENT = {
     "suara": ["send_voice_message"],
     "jurnal": ["save_journal_entry", "get_journal_recap"],
     "kuota": ["check_quota"],
+    "search": ["search_internet"],
 }
 
 
@@ -554,6 +574,37 @@ async def execute_send_voice_message(chat_id: int, text: str) -> dict[str, Any]:
         }
 
 
+async def search_internet(query: str) -> dict[str, Any]:
+    """
+    Mencari informasi terkini di internet menggunakan DuckDuckGo Search (DDGS).
+    """
+    try:
+        def _do_search():
+            from duckduckgo_search import DDGS
+            with DDGS() as ddgs:
+                return list(ddgs.text(query, max_results=3))
+
+        results = await asyncio.to_thread(_do_search)
+        await asyncio.sleep(2)
+
+        if not results:
+            return {"message": "Oline gak nemu info yang cocok nih, bestie."}
+
+        snippets = []
+        for r in results:
+            title = r.get("title", "")
+            body = r.get("body", "")
+            if title and body:
+                snippets.append(f"{title}: {body}")
+            elif title or body:
+                snippets.append(title or body)
+
+        return {"results": "\n".join(snippets)}
+    except Exception as e:
+        logger.error("DuckDuckGo search error: %s", str(e))
+        return {"error": "Aduh, Oline lagi gak bisa akses internet nih. Coba lagi nanti ya~"}
+
+
 # Map nama tool ke executor function
 TOOL_EXECUTORS = {
     "get_movie_recommendation": get_movie_recommendation,
@@ -563,4 +614,5 @@ TOOL_EXECUTORS = {
     "get_journal_recap": execute_get_journal_recap,
     "check_quota": execute_check_quota,
     "send_voice_message": execute_send_voice_message,
+    "search_internet": search_internet,
 }

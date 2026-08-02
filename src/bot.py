@@ -140,6 +140,7 @@ HEAVY_KEYWORDS = {
     "suara": ["suara", "nyanyi", "gombal", "puisi", "bacain", "baca"],
     "jurnal": ["jurnal", "catat", "rekap jurnal"],
     "kuota": ["kuota", "token", "quota"],
+    "search": ["cari", "search", "apa itu", "siapa", "kapan", "dimana", "berita", "definisi", "pengertian"],
 }
 
 

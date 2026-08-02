@@ -1,53 +1,115 @@
 
-## Kenapa Bisa Ada Tanda Bintang?
-Gemini (dan model AI lainnya) sering menggunakan format Markdown (`**bold**`, `*italic*`, daftar bernomor) secara default karena dianggap rapi. Tapi karena Oline adalah teman ngobrol yang santai, dia harusnya bicara natural tanpa formatting kaku.
-
----
-
-## Solusi: Perbaiki System Prompt Oline
-
-Di file `personas.py` atau tempat definisi system prompt, kamu perlu menambahkan instruksi tegas tentang gaya menulis. Berikan ini ke Antigravity:
-
-### System Prompt Tambahan (Untuk Menghilangkan Markdown)
-```text
-## Gaya Menulis
-- JANGAN PERNAH menggunakan format Markdown (**, *, __, dsb). Tulis dengan teks polos biasa.
-- Jangan gunakan daftar bernomor atau bullet point yang kaku. Sampaikan saran atau ide dalam bentuk paragraf mengalir atau kalimat lepas yang natural, seperti teman ngobrol.
-- Boleh pakai emoji secukupnya untuk menambah ekspresi, tapi jangan berlebihan.
-- Variasikan panjang kalimat, jangan semua poin sama panjangnya. Sesekali gunakan slang Gen-Z yang ringan (tapi jangan dipaksakan).
-- Saat memberi beberapa ide, sampaikan dengan gaya "kamu bisa coba ini, atau itu...", bukan format poin 1, 2, 3.
-```
-
-### Contoh Perbaikan Respons
-Setelah system prompt diperbarui, respons Oline seharusnya otomatis berubah.
-
-#### Sebelum (berbintang, AI banget):
-```
-1. **Jalan santai/ke coffeeshop dekat rumah** – Sekadar nyari udara segar...
-2. **Dengerin playlist chill / maraton film** – Kalau lagi pengen rekomendasi...
-```
-
-#### Sesudah (natural, Gen-Z):
-```
-Hmm, paham banget sih rasanya. Kadang emang butuh hari tanpa plan berat ya. Coba deh sambil jalan santai ke coffeeshop deket rumah, siapa tau bisa liat orang-orang lewat sambil ngopi chill. Atau kalau males keluar, tiduran dengerin playlist chill juga enak tuh, aku bisa kasih rekomendasi lagu lo. Terus kalau tiba-tiba mood beberes, beresin meja dikit sambil dengerin musik favorit juga lumayan bikin fresh. Oh iya, jangan lupa catat apa yang lagi kamu rasa di jurnal, nanti aku bantuin simpen kalau mau. Gimana, ada yang ngena? ☕✨
-```
-
----
-
-## Brief untuk Antigravity: Perbaiki Gaya Menulis Oline
+## Brief Fitur: Oline Bisa Cari Info di Internet (DuckDuckGo)
 
 ### 🎯 Tujuan
-Menghilangkan tanda bintang dan format Markdown dari respons Oline, mengubahnya menjadi teks natural sesuai persona teman Gen-Z.
+Oline mampu mencari informasi terkini dari internet saat pengguna bertanya hal di luar pengetahuan Gemini (berita, fakta terbaru, definisi, dll.), lalu menyampaikannya dengan gaya natural Oline.
 
-### 🛠️ Yang Perlu Dilakukan
-1. Buka file `src/personas.py` (atau di mana system prompt Oline didefinisikan).
-2. Tambahkan aturan **"Gaya Menulis"** seperti di atas ke dalam system prompt utama Oline.
-3. Pastikan instruksi diletakkan sebelum contoh percakapan (jika ada).
-4. (Opsional) Tambahkan contoh pasangan pertanyaan-jawaban yang menunjukkan gaya natural tanpa markdown di prompt, misalnya:
+### 💰 Opsi Teknis
+Pakai **DuckDuckGo Instant Answer** via library `duckduckgo_search` (gratis, tanpa API key, tanpa batas harian resmi). Ini aman untuk penggunaan personal dengan rate limiting wajar.
 
+### 🛠️ Langkah Implementasi
+
+#### 1. Tambahkan Dependensi
+- Di `requirements.txt`, tambahkan: `duckduckgo-search`
+
+#### 2. Tambahkan Tool Baru di Function Calling
+Di file `src/tools.py` (atau tempat mendefinisikan tools), tambahkan definisi fungsi:
+
+```python
+search_tool = {
+    "name": "search_internet",
+    "description": "Cari informasi terkini di internet. Gunakan saat pengguna bertanya hal yang memerlukan data real-time atau di luar pengetahuan umum yang kamu miliki.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Kata kunci pencarian yang ingin dicari di internet."
+            }
+        },
+        "required": ["query"]
+    }
+}
 ```
-User: "Rekomendasi kegiatan akhir pekan dong"
-Oline: "Weekend ya enaknya santai sih. Kalau aku jadi kamu, aku bakal coba jalan pagi ke taman, habis itu mampir beli kopi favorit. Atau kalau lagi mager, rebahan sambil nonton film horor juga asik banget. Btw, kamu udah nonton yang baru itu belum? Bisa juga nyobain resep masakan simpel, siapa tau jadi hobi baru~"
+
+- Pastikan `search_tool` dimasukkan ke dalam daftar tools yang tersedia untuk intent pencarian. (Bisa ditambahkan ke `TOOLS_BY_INTENT` di handler fast path nanti).
+
+#### 3. Buat Handler untuk Tool
+Di file yang sama (`tools.py`), implementasikan fungsi pemanggil DuckDuckGo:
+
+```python
+from duckduckgo_search import DDGS
+
+def search_internet(query: str) -> str:
+    try:
+        with DDGS() as ddgs:
+            results = ddgs.text(query, max_results=3)
+            if not results:
+                return "Oline gak nemu info yang cocok nih, bestie."
+            # Gabungkan judul dan body untuk konteks Gemini
+            snippets = []
+            for r in results:
+                snippets.append(f"{r['title']}: {r['body']}")
+            return "\n".join(snippets)
+    except Exception as e:
+        # Fallback jika DDG error
+        return "Aduh, Oline lagi gak bisa akses internet nih. Coba lagi nanti ya~"
 ```
 
-5. Uji dengan beberapa permintaan yang biasa menghasilkan daftar, pastikan tidak ada tanda bintang atau poin.
+**Catatan:** Karena Gemini nanti yang akan merangkum, kita berikan data mentah. Jangan lupa return teks yang cukup informatif.
+
+#### 4. Daftarkan Handler di `gemini.py` (atau handler utama)
+- Tambahkan fungsi `search_internet` ke mapping pemanggilan tools.  
+- Jika pakai dictionary tool handler seperti `TOOL_HANDLERS = {"search_internet": search_internet}`, pastikan terdaftar.
+
+#### 5. Integrasikan ke Fast Path / Intent Detection
+Di `handlers.py`, tambahkan intent “search” ke dalam `HEAVY_KEYWORDS`:
+
+```python
+"search": ["cari", "search", "apa itu", "siapa", "kapan", "dimana", "berita", "definisi", "pengertian"]
+```
+
+Dan pastikan tools search ditambahkan ke `TOOLS_BY_INTENT["search"] = [search_tool]`.
+
+Atau bisa juga, tanpa intent spesifik: biarkan Gemini yang memutuskan kapan memanggil search. Tapi agar tetap cepat, lebih baik search di-trigger oleh kata kunci tertentu (slow path), tidak di-fast-path.
+
+#### 6. Perbarui System Prompt Oline
+Di `personas.py`, tambahkan instruksi agar Oline tahu kapan harus menggunakan search:
+
+```text
+## Pengetahuan dan Pencarian Internet
+- Pengetahuan dasarmu hanya sampai pertengahan 2024. Jika pengguna bertanya tentang hal yang terjadi setelahnya atau memerlukan data terkini, WAJIB gunakan fungsi search_internet.
+- Setelah mendapatkan hasil pencarian, olah kembali menjadi jawaban yang natural ala Oline. Jangan hanya copy-paste mentah.
+- Sebut sumber singkat jika relevan (misal "kata Detik.com sih...") tapi jangan berlebihan.
+```
+
+#### 7. Penanganan Rate Limiting (Opsional, tapi disarankan)
+- Beri jeda 2 detik setelah setiap panggilan DDG (gunakan `time.sleep(2)` di handler) untuk menghindari IP diblokir.
+- Karena bot pribadi, ini sangat jarang terjadi, tapi lebih aman.
+
+#### 8. Chat Action
+- Saat search dipanggil, kirim `sendChatAction` dengan `action="typing"` (atau "find_location" untuk variasi) supaya pengguna tahu Oline sedang mencari.
+
+### 📁 File yang Perlu Diubah/Dibuat
+- `requirements.txt` – tambahkan `duckduckgo-search`
+- `src/tools.py` – tambahkan `search_tool` dan handler `search_internet`
+- `src/gemini.py` – daftarkan tool handler baru
+- `src/handlers.py` – tambahkan intent "search" ke keyword dan mapping tools
+- `src/personas.py` – update system prompt
+
+### 🧪 Contoh Percakapan
+```
+User: Olin, siapa presiden Indonesia sekarang?
+Oline: (search otomatis)
+Bentar ya, Oline cek dulu~
+Presiden Indonesia sekarang adalah Prabowo Subianto, bestie. Dilantik 20 Oktober 2024 kemarin. Jadi udah ganti nih dari Pak Jokowi.
+
+User: Berapa harga emas hari ini?
+Oline: (search)
+Harga emas Antam hari ini di kisaran Rp 1.450.000 per gram, naik dikit dari kemarin. Mau investasi atau sekadar pantau aja nih? 💸
+```
+
+### ⚠️ Catatan
+- Hindari pencarian berulang untuk pertanyaan yang mirip dalam waktu singkat; manfaatkan memori percakapan agar tidak boros.
+- Jika DDG down, Oline akan memberikan fallback yang lucu tanpa error mentah.
+- Fitur ini tetap gratis, tidak ada biaya tambahan.
