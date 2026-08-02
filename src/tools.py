@@ -576,13 +576,17 @@ async def execute_send_voice_message(chat_id: int, text: str) -> dict[str, Any]:
 
 async def search_internet(query: str) -> dict[str, Any]:
     """
-    Mencari informasi terkini di internet menggunakan DuckDuckGo Search (DDGS).
+    Mencari informasi terkini di internet menggunakan DDGS (DuckDuckGo Search).
     """
     try:
         def _do_search():
-            from duckduckgo_search import DDGS
+            try:
+                from ddgs import DDGS
+            except ImportError:
+                from duckduckgo_search import DDGS
+
             with DDGS() as ddgs:
-                return list(ddgs.text(query, max_results=3))
+                return list(ddgs.text(query, max_results=5))
 
         results = await asyncio.to_thread(_do_search)
         await asyncio.sleep(2)
@@ -594,10 +598,11 @@ async def search_internet(query: str) -> dict[str, Any]:
         for r in results:
             title = r.get("title", "")
             body = r.get("body", "")
+            href = r.get("href", "")
             if title and body:
-                snippets.append(f"{title}: {body}")
+                snippets.append(f"{title}: {body} (Sumber: {href})")
             elif title or body:
-                snippets.append(title or body)
+                snippets.append(f"{title or body} (Sumber: {href})")
 
         return {"results": "\n".join(snippets)}
     except Exception as e:

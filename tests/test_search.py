@@ -51,14 +51,12 @@ class TestSearchFeature(unittest.TestCase):
         self.assertEqual(len(tools_for_intent), 1)
         self.assertEqual(tools_for_intent[0]["name"], "search_internet")
 
-    @patch("duckduckgo_search.DDGS")
-    def test_search_internet_success(self, mock_ddgs_cls):
+    @patch("src.tools.asyncio.to_thread")
+    def test_search_internet_success(self, mock_to_thread):
         """Memastikan search_internet mengembalikan hasil snippet yang diformat dengan benar."""
-        mock_ddgs_instance = MagicMock()
-        mock_ddgs_cls.return_value.__enter__.return_value = mock_ddgs_instance
-        mock_ddgs_instance.text.return_value = [
-            {"title": "Judul 1", "body": "Ringkasan berita 1"},
-            {"title": "Judul 2", "body": "Ringkasan berita 2"},
+        mock_to_thread.return_value = [
+            {"title": "Judul 1", "body": "Ringkasan berita 1", "href": "https://example.com/1"},
+            {"title": "Judul 2", "body": "Ringkasan berita 2", "href": "https://example.com/2"},
         ]
 
         async def _run():
@@ -69,12 +67,10 @@ class TestSearchFeature(unittest.TestCase):
 
         asyncio.run(_run())
 
-    @patch("duckduckgo_search.DDGS")
-    def test_search_internet_empty_results(self, mock_ddgs_cls):
+    @patch("src.tools.asyncio.to_thread")
+    def test_search_internet_empty_results(self, mock_to_thread):
         """Memastikan search_internet menangani hasil kosong dengan pesan fallback."""
-        mock_ddgs_instance = MagicMock()
-        mock_ddgs_cls.return_value.__enter__.return_value = mock_ddgs_instance
-        mock_ddgs_instance.text.return_value = []
+        mock_to_thread.return_value = []
 
         async def _run():
             res = await search_internet("xyzabc12345nonexistent")
@@ -82,12 +78,10 @@ class TestSearchFeature(unittest.TestCase):
 
         asyncio.run(_run())
 
-    @patch("duckduckgo_search.DDGS")
-    def test_search_internet_error_handling(self, mock_ddgs_cls):
+    @patch("src.tools.asyncio.to_thread")
+    def test_search_internet_error_handling(self, mock_to_thread):
         """Memastikan search_internet menangani exception dengan respons error yang ramah."""
-        mock_ddgs_instance = MagicMock()
-        mock_ddgs_cls.return_value.__enter__.return_value = mock_ddgs_instance
-        mock_ddgs_instance.text.side_effect = Exception("DDG Connection error")
+        mock_to_thread.side_effect = Exception("DDG Connection error")
 
         async def _run():
             res = await search_internet("query error")
