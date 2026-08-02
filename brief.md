@@ -1,115 +1,64 @@
 
-## Brief Fitur: Oline Bisa Cari Info di Internet (DuckDuckGo)
+## Brief Fitur: Auto-Correct Typo Ringan Sebelum Pemrosesan Pesan
 
 ### 🎯 Tujuan
-Oline mampu mencari informasi terkini dari internet saat pengguna bertanya hal di luar pengetahuan Gemini (berita, fakta terbaru, definisi, dll.), lalu menyampaikannya dengan gaya natural Oline.
+Bot Oline tetap bisa memahami maksud pengguna meskipun ada kesalahan ketik (typo) kecil, tanpa mengubah pengalaman ngobrol yang cepat.
 
-### 💰 Opsi Teknis
-Pakai **DuckDuckGo Instant Answer** via library `duckduckgo_search` (gratis, tanpa API key, tanpa batas harian resmi). Ini aman untuk penggunaan personal dengan rate limiting wajar.
+### 🔧 Solusi
+Gunakan library spell checker ringan berbahasa Indonesia `autocorrect` (gratis, tanpa API) untuk mengoreksi teks sebelum masuk ke pengecekan intent atau dikirim ke Gemini.
+
+Contoh:
+- Input: "cari tau siap ekin"
+- Output setelah koreksi: "cari tau siapa ekin"
+
+Library `autocorrect` mendukung bahasa Indonesia (`lang='id'`) dan cukup akurat untuk typo umum.
 
 ### 🛠️ Langkah Implementasi
 
 #### 1. Tambahkan Dependensi
-- Di `requirements.txt`, tambahkan: `duckduckgo-search`
+Di `requirements.txt`, tambahkan:
+```
+autocorrect
+```
 
-#### 2. Tambahkan Tool Baru di Function Calling
-Di file `src/tools.py` (atau tempat mendefinisikan tools), tambahkan definisi fungsi:
+#### 2. Modifikasi Handler Pesan (`handlers.py`)
+Pada bagian awal fungsi yang menerima teks dari pengguna, lakukan koreksi ejaan:
 
 ```python
-search_tool = {
-    "name": "search_internet",
-    "description": "Cari informasi terkini di internet. Gunakan saat pengguna bertanya hal yang memerlukan data real-time atau di luar pengetahuan umum yang kamu miliki.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "Kata kunci pencarian yang ingin dicari di internet."
-            }
-        },
-        "required": ["query"]
-    }
-}
+from autocorrect import Speller
+
+# Inisialisasi sekali di level modul (agar tidak dibuat ulang setiap request)
+spell_id = Speller(lang='id')
+
+# Di dalam fungsi handler:
+original_text = update.message.text
+corrected_text = spell_id(original_text)
+
+# Opsional: log perbedaan agar bisa di-debug
+if original_text != corrected_text:
+    print(f"Typo corrected: '{original_text}' -> '{corrected_text}'")
+
+# Gunakan corrected_text untuk keyword detection dan kirim ke Gemini
+text_to_process = corrected_text
 ```
 
-- Pastikan `search_tool` dimasukkan ke dalam daftar tools yang tersedia untuk intent pencarian. (Bisa ditambahkan ke `TOOLS_BY_INTENT` di handler fast path nanti).
+#### 3. Pastikan Nama Orang / Kata Khusus Tidak Terkoreksi Berlebihan
+Kadang nama seperti "Ekin" bisa dikoreksi menjadi "ekin" (kata benda?). Tapi dalam kasus ini, "Ekin" adalah nama, jadi mungkin akan tetap dianggap tidak baku. Untuk sementara, biarkan dulu. Kalau ke depannya sering salah koreksi nama, kita bisa tambahkan daftar pengecualian (custom word list) di Speller.
 
-#### 3. Buat Handler untuk Tool
-Di file yang sama (`tools.py`), implementasikan fungsi pemanggil DuckDuckGo:
-
-```python
-from duckduckgo_search import DDGS
-
-def search_internet(query: str) -> str:
-    try:
-        with DDGS() as ddgs:
-            results = ddgs.text(query, max_results=3)
-            if not results:
-                return "Oline gak nemu info yang cocok nih, bestie."
-            # Gabungkan judul dan body untuk konteks Gemini
-            snippets = []
-            for r in results:
-                snippets.append(f"{r['title']}: {r['body']}")
-            return "\n".join(snippets)
-    except Exception as e:
-        # Fallback jika DDG error
-        return "Aduh, Oline lagi gak bisa akses internet nih. Coba lagi nanti ya~"
-```
-
-**Catatan:** Karena Gemini nanti yang akan merangkum, kita berikan data mentah. Jangan lupa return teks yang cukup informatif.
-
-#### 4. Daftarkan Handler di `gemini.py` (atau handler utama)
-- Tambahkan fungsi `search_internet` ke mapping pemanggilan tools.  
-- Jika pakai dictionary tool handler seperti `TOOL_HANDLERS = {"search_internet": search_internet}`, pastikan terdaftar.
-
-#### 5. Integrasikan ke Fast Path / Intent Detection
-Di `handlers.py`, tambahkan intent “search” ke dalam `HEAVY_KEYWORDS`:
-
-```python
-"search": ["cari", "search", "apa itu", "siapa", "kapan", "dimana", "berita", "definisi", "pengertian"]
-```
-
-Dan pastikan tools search ditambahkan ke `TOOLS_BY_INTENT["search"] = [search_tool]`.
-
-Atau bisa juga, tanpa intent spesifik: biarkan Gemini yang memutuskan kapan memanggil search. Tapi agar tetap cepat, lebih baik search di-trigger oleh kata kunci tertentu (slow path), tidak di-fast-path.
-
-#### 6. Perbarui System Prompt Oline
-Di `personas.py`, tambahkan instruksi agar Oline tahu kapan harus menggunakan search:
-
-```text
-## Pengetahuan dan Pencarian Internet
-- Pengetahuan dasarmu hanya sampai pertengahan 2024. Jika pengguna bertanya tentang hal yang terjadi setelahnya atau memerlukan data terkini, WAJIB gunakan fungsi search_internet.
-- Setelah mendapatkan hasil pencarian, olah kembali menjadi jawaban yang natural ala Oline. Jangan hanya copy-paste mentah.
-- Sebut sumber singkat jika relevan (misal "kata Detik.com sih...") tapi jangan berlebihan.
-```
-
-#### 7. Penanganan Rate Limiting (Opsional, tapi disarankan)
-- Beri jeda 2 detik setelah setiap panggilan DDG (gunakan `time.sleep(2)` di handler) untuk menghindari IP diblokir.
-- Karena bot pribadi, ini sangat jarang terjadi, tapi lebih aman.
-
-#### 8. Chat Action
-- Saat search dipanggil, kirim `sendChatAction` dengan `action="typing"` (atau "find_location" untuk variasi) supaya pengguna tahu Oline sedang mencari.
+#### 4. (Opsional) Fallback di System Prompt
+Tambahkan instruksi di system prompt Oline: "Jika pengguna mengetik dengan sedikit typo, cobalah pahami maksud sebenarnya dan jangan langsung menyerah. Gunakan fungsi pencarian jika diperlukan dengan perkiraan kata yang benar."
 
 ### 📁 File yang Perlu Diubah/Dibuat
-- `requirements.txt` – tambahkan `duckduckgo-search`
-- `src/tools.py` – tambahkan `search_tool` dan handler `search_internet`
-- `src/gemini.py` – daftarkan tool handler baru
-- `src/handlers.py` – tambahkan intent "search" ke keyword dan mapping tools
-- `src/personas.py` – update system prompt
+- `requirements.txt` – tambahkan `autocorrect`
+- `src/handlers.py` – tambahkan inisialisasi Speller dan terapkan pada teks sebelum diproses
 
-### 🧪 Contoh Percakapan
-```
-User: Olin, siapa presiden Indonesia sekarang?
-Oline: (search otomatis)
-Bentar ya, Oline cek dulu~
-Presiden Indonesia sekarang adalah Prabowo Subianto, bestie. Dilantik 20 Oktober 2024 kemarin. Jadi udah ganti nih dari Pak Jokowi.
-
-User: Berapa harga emas hari ini?
-Oline: (search)
-Harga emas Antam hari ini di kisaran Rp 1.450.000 per gram, naik dikit dari kemarin. Mau investasi atau sekadar pantau aja nih? 💸
-```
+### 🧪 Skenario Uji
+- Input: "cari tau siap ekin" → Oline akan mencari "siapa ekin" dan memberikan jawaban.
+- Input: "rekomendasi flm horor" → dikoreksi jadi "rekomendasi film horor", lalu berfungsi normal.
+- Input: "cuaca di jkarta" → dikoreksi jadi "cuaca di jakarta".
+- Input normal tanpa typo tetap aman.
 
 ### ⚠️ Catatan
-- Hindari pencarian berulang untuk pertanyaan yang mirip dalam waktu singkat; manfaatkan memori percakapan agar tidak boros.
-- Jika DDG down, Oline akan memberikan fallback yang lucu tanpa error mentah.
-- Fitur ini tetap gratis, tidak ada biaya tambahan.
+- Latensi tambahan sangat kecil (< 50ms) karena koreksi dilakukan lokal.
+- Jika suatu kata tidak dikenal, Speller akan membiarkannya (tidak dipaksa berubah), jadi nama unik seperti "Ekin" tetap lolos.
+- Solusi ini bekerja di sisi kode, tidak menambah biaya.
