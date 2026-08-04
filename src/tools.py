@@ -223,14 +223,92 @@ TOOL_DECLARATIONS = [
         },
     },
     {
-        "name": "get_market_summary",
+        "name": "create_drive_folder",
         "description": (
-            "Ambil ringkasan pergerakan IHSG hari ini: nilai indeks, perubahan, dan saham top gainer/loser."
+            "Membuat folder baru di Google Drive (Database Oline). "
+            "Gunakan saat pengguna meminta membuat folder baru di drive/database."
         ),
         "parameters": {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "folder_name": {
+                    "type": "string",
+                    "description": "Nama folder baru yang ingin dibuat.",
+                }
+            },
+            "required": ["folder_name"],
+        },
+    },
+    {
+        "name": "list_drive_files",
+        "description": (
+            "Melihat daftar isi file dan folder di Google Drive (Database Oline). "
+            "Gunakan saat pengguna meminta tampilkan isi folder, lihat daftar file, atau isi database."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "folder_name": {
+                    "type": "string",
+                    "description": "Nama subfolder yang ingin dilihat isinya (opsional). Jika kosong, tampilkan root database.",
+                }
+            },
             "required": [],
+        },
+    },
+    {
+        "name": "search_drive_files",
+        "description": (
+            "Mencari file berdasarkan nama di Google Drive (Database Oline). "
+            "Gunakan saat pengguna mencari file spesifik."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Kata kunci atau nama file yang dicari.",
+                }
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "upload_to_drive",
+        "description": (
+            "Menyimpan file/dokumen/foto yang baru diterima dari pengguna ke Google Drive. "
+            "Gunakan saat pengguna meminta menyimpan file/foto ke folder atau database."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "folder_name": {
+                    "type": "string",
+                    "description": "Nama subfolder tempat menyimpan file (opsional).",
+                }
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "download_from_drive",
+        "description": (
+            "Mengambil dan mengirimkan file/foto dari Google Drive kembali ke pengguna di Telegram. "
+            "Gunakan saat pengguna meminta kirim file, minta foto, atau download dari drive."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "file_name": {
+                    "type": "string",
+                    "description": "Nama file atau foto yang ingin dikirimkan.",
+                },
+                "folder_name": {
+                    "type": "string",
+                    "description": "Nama subfolder tempat file tersimpan (opsional).",
+                },
+            },
+            "required": ["file_name"],
         },
     },
 ]
@@ -243,7 +321,15 @@ TOOLS_BY_INTENT = {
     "kuota": ["check_quota"],
     "search": ["search_internet"],
     "saham": ["get_stock_price", "get_market_summary"],
+    "drive": [
+        "create_drive_folder",
+        "list_drive_files",
+        "search_drive_files",
+        "upload_to_drive",
+        "download_from_drive",
+    ],
 }
+
 
 
 
@@ -776,6 +862,171 @@ async def get_market_summary() -> dict[str, Any]:
         return {"error": f"Gagal ambil data IHSG: {str(e)}"}
 
 
+async def execute_create_drive_folder(folder_name: str) -> dict[str, Any]:
+    """Membuat folder baru di Google Drive (Database Oline)."""
+    try:
+        from src.drive import create_folder, get_drive_service
+        service = get_drive_service()
+        folder_id, is_new = await asyncio.to_thread(create_folder, service, folder_name)
+        if is_new:
+            return {
+                "status": "success",
+                "folder_name": folder_name,
+                "message": f"Folder '{folder_name}' berhasil dibuat di Database Oline! 📂",
+            }
+        else:
+            return {
+                "status": "exists",
+                "folder_name": folder_name,
+                "message": f"Folder '{folder_name}' sudah ada di Database Oline.",
+            }
+    except Exception as e:
+        logger.error("Error in create_drive_folder: %s", str(e))
+        return {"error": f"Gagal membuat folder '{folder_name}': {str(e)}"}
+
+
+async def execute_list_drive_files(folder_name: Optional[str] = None) -> dict[str, Any]:
+    """Melihat daftar isi file & folder di Google Drive."""
+    try:
+        from src.drive import get_drive_service, list_files
+        service = get_drive_service()
+        items = await asyncio.to_thread(list_files, service, folder_name)
+        if not items:
+            loc = f"folder '{folder_name}'" if folder_name else "Database Oline"
+            return {"message": f"Belum ada file di {loc} nih."}
+
+        formatted_items = []
+        for item in items:
+            icon = "📂" if item["is_folder"] else "📄"
+            formatted_items.append(f"{icon} {item['name']}")
+
+        return {
+            "location": folder_name or "Root Database",
+            "total_items": len(items),
+            "items": formatted_items,
+        }
+    except Exception as e:
+        logger.error("Error in list_drive_files: %s", str(e))
+        return {"error": f"Gagal mengambil daftar file: {str(e)}"}
+
+
+async def execute_search_drive_files(query: str) -> dict[str, Any]:
+    """Mencari file di Google Drive berdasarkan nama."""
+    try:
+        from src.drive import get_drive_service, search_files
+        service = get_drive_service()
+        items = await asyncio.to_thread(search_files, service, query)
+        if not items:
+            return {"message": f"Gak ketemu file yang cocok dengan nama '{query}' nih."}
+
+        formatted_items = []
+        for item in items:
+            icon = "📂" if item["is_folder"] else "📄"
+            formatted_items.append(f"{icon} {item['name']}")
+
+        return {"query": query, "total_found": len(items), "results": formatted_items}
+    except Exception as e:
+        logger.error("Error in search_drive_files: %s", str(e))
+        return {"error": f"Gagal mencari file: {str(e)}"}
+
+
+async def execute_upload_to_drive(
+    chat_id: int = 0, folder_name: Optional[str] = None
+) -> dict[str, Any]:
+    """Menyimpan file yang baru dikirim pengguna ke Google Drive."""
+    try:
+        from src.drive import get_drive_service, upload_file
+        from src.kv import clear_pending_file, get_pending_file
+
+        pending = await get_pending_file(chat_id)
+        if not pending:
+            return {
+                "error": "File tidak ditemukan",
+                "message": (
+                    "Oline gak nemu file yang baru kamu kirim nih. "
+                    "Coba kirim ulang file atau fotonya ya!"
+                ),
+            }
+
+        service = get_drive_service()
+        result = await asyncio.to_thread(
+            upload_file,
+            service,
+            pending["file_name"],
+            pending["file_bytes"],
+            pending["mime_type"],
+            folder_name,
+        )
+
+        await clear_pending_file(chat_id)
+
+        target_dest = f"folder '{folder_name}'" if folder_name else "Database Oline"
+        return {
+            "status": "success",
+            "file_name": result["name"],
+            "destination": target_dest,
+            "web_link": result.get("web_link", ""),
+            "message": f"File '{result['name']}' berhasil tersimpan rapi di {target_dest}! 📁✨",
+        }
+    except Exception as e:
+        logger.error("Error in upload_to_drive: %s", str(e))
+        return {"error": f"Gagal mengunggah file ke Google Drive: {str(e)}"}
+
+
+async def execute_download_from_drive(
+    chat_id: int = 0, file_name: str = "", folder_name: Optional[str] = None
+) -> dict[str, Any]:
+    """Mendownload file dari Google Drive dan mengirimkannya ke Telegram."""
+    try:
+        from src.drive import download_file, get_drive_service, list_files, search_files
+
+        service = get_drive_service()
+
+        matching_files = (
+            await asyncio.to_thread(list_files, service, folder_name)
+            if folder_name
+            else await asyncio.to_thread(search_files, service, file_name)
+        )
+
+        target_file = None
+        for item in matching_files:
+            if not item["is_folder"] and file_name.lower() in item["name"].lower():
+                target_file = item
+                break
+
+        if not target_file and matching_files:
+            for item in matching_files:
+                if not item["is_folder"]:
+                    target_file = item
+                    break
+
+        if not target_file:
+            return {"error": f"File '{file_name}' tidak ditemukan di Drive 😢"}
+
+        file_bytes, real_name, mime_type = await asyncio.to_thread(
+            download_file, service, target_file["id"]
+        )
+
+        from src.bot import send_drive_file_to_telegram
+
+        sent = await send_drive_file_to_telegram(
+            chat_id=chat_id, file_bytes=file_bytes, file_name=real_name, mime_type=mime_type
+        )
+
+        if sent:
+            return {
+                "status": "success",
+                "file_name": real_name,
+                "message": f"File '{real_name}' udah Oline kirim langsung ke chat ini yaa! 📄✨",
+            }
+        else:
+            return {"error": f"Gagal mengirimkan file '{real_name}' ke Telegram."}
+
+    except Exception as e:
+        logger.error("Error in download_from_drive: %s", str(e))
+        return {"error": f"Gagal mengambil file dari Google Drive: {str(e)}"}
+
+
 # Map nama tool ke executor function
 TOOL_EXECUTORS = {
     "get_movie_recommendation": get_movie_recommendation,
@@ -788,5 +1039,11 @@ TOOL_EXECUTORS = {
     "search_internet": search_internet,
     "get_stock_price": get_stock_price,
     "get_market_summary": get_market_summary,
+    "create_drive_folder": execute_create_drive_folder,
+    "list_drive_files": execute_list_drive_files,
+    "search_drive_files": execute_search_drive_files,
+    "upload_to_drive": execute_upload_to_drive,
+    "download_from_drive": execute_download_from_drive,
 }
+
 

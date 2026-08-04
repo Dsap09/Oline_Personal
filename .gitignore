@@ -1,6 +1,9 @@
-# Environment
+# Environment & Secrets
 .env
 .env.local
+*.json
+!vercel.json
+
 
 # Python
 __pycache__/

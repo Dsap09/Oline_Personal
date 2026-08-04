@@ -3,11 +3,13 @@ Helper untuk akses Vercel KV (Redis REST API) via httpx.
 Menyediakan fungsi untuk memori percakapan dan penyimpanan jurnal harian.
 """
 
+import base64
 import json
 import logging
 import os
 from datetime import datetime, timedelta
 from typing import Optional
+
 
 import httpx
 
@@ -21,6 +23,8 @@ RATE_PREFIX = "rate"
 USAGE_PREFIX = "gemini_usage"
 GROQ_USAGE_PREFIX = "groq_usage"
 TTS_PREFIX = "tts_usage"
+PENDING_FILE_PREFIX = "pending_file"
+
 
 
 
@@ -318,4 +322,50 @@ async def check_rate_limit(chat_id: int, max_requests: int = 25) -> bool:
         return False
 
     return True
+
+
+# --- Pending File Cache for Telegram Uploads ---
+
+async def save_pending_file(
+    chat_id: int, file_name: str, file_bytes: bytes, mime_type: str
+) -> bool:
+    """
+    Menyimpan file sementara yang baru diunggah pengguna ke KV.
+    TTL 10 menit (600 detik).
+    """
+    key = f"{PENDING_FILE_PREFIX}:{chat_id}"
+    b64_str = base64.b64encode(file_bytes).decode("utf-8")
+    payload = json.dumps({
+        "file_name": file_name,
+        "mime_type": mime_type,
+        "file_bytes": b64_str,
+    })
+    result = await _kv_request(["SET", key, payload, "EX", "600"])
+    return result is not None
+
+
+async def get_pending_file(chat_id: int) -> Optional[dict]:
+    """
+    Mengambil file sementara pengguna dari KV.
+    """
+    key = f"{PENDING_FILE_PREFIX}:{chat_id}"
+    result = await _kv_request(["GET", key])
+    if result and result.get("result"):
+        try:
+            data = json.loads(result["result"])
+            data["file_bytes"] = base64.b64decode(data["file_bytes"])
+            return data
+        except Exception as e:
+            logger.warning("Error reading pending file from KV: %s", str(e))
+    return None
+
+
+async def clear_pending_file(chat_id: int) -> bool:
+    """
+    Menghapus file sementara pengguna setelah diunggah ke Drive.
+    """
+    key = f"{PENDING_FILE_PREFIX}:{chat_id}"
+    result = await _kv_request(["DEL", key])
+    return result is not None
+
 

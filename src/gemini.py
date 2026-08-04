@@ -139,8 +139,11 @@ async def _execute_function_call(
         return await executor(chat_id=chat_id)
     elif func_name == "send_voice_message":
         return await executor(chat_id=chat_id, text=func_args.get("text", ""))
+    elif func_name in ("upload_to_drive", "download_from_drive"):
+        return await executor(chat_id=chat_id, **func_args)
     else:
         return await executor(**func_args)
+
 
 
 async def _update_memory(

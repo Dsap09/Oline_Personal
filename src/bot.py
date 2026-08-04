@@ -49,10 +49,14 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("help", handle_help))
     application.add_handler(CommandHandler("jurnal", handle_jurnal_command))
     application.add_handler(
+        MessageHandler(filters.Document.ALL | filters.PHOTO, handle_file_message)
+    )
+    application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
     )
 
     return application
+
 
 
 async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -151,11 +155,17 @@ HEAVY_KEYWORDS = {
     "suara": ["suara", "nyanyi", "gombal", "puisi", "bacain", "baca"],
     "jurnal": ["jurnal", "catat", "rekap jurnal"],
     "kuota": ["kuota", "token", "quota"],
+    "drive": [
+        "drive", "database", "folder", "simpan file", "buat folder",
+        "cari file", "tampilkan isi", "kirim file", "upload", "download", "file",
+    ],
     "search": ["cari", "search", "apa itu", "siapa", "kapan", "dimana", "berita", "definisi", "pengertian"],
     "saham": [
         "saham", "ihsg", "indeks", "index", "market", "bursa", "gainer", "loser",
     ] + POPULAR_STOCK_TICKERS,
 }
+
+
 
 
 def detect_intent(text: str) -> str | None:
@@ -250,5 +260,103 @@ async def handle_message(
             await update.effective_chat.send_message(chunk)
     else:
         await update.effective_chat.send_message(response)
+
+
+async def handle_file_message(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """
+    Handler untuk pesan dokumen dan foto yang diunggah pengguna ke Telegram.
+    Mendownload file bytes, menyimpan ke KV cache sementara, dan memproses caption jika ada.
+    """
+    if not update.effective_chat or not update.message:
+        return
+
+    chat_id = update.effective_chat.id
+
+    # Rate limiting
+    if not await check_rate_limit(chat_id):
+        await update.effective_chat.send_message(
+            "sabar ya, kamu udah kebanyakan chat 😅 tunggu sebentar lagi."
+        )
+        return
+
+    file_obj = None
+    file_name = "file_oline"
+    mime_type = "application/octet-stream"
+
+    if update.message.document:
+        doc = update.message.document
+        file_name = doc.file_name or "dokumen_oline"
+        mime_type = doc.mime_type or "application/octet-stream"
+        file_obj = await context.bot.get_file(doc.file_id)
+    elif update.message.photo:
+        photo = update.message.photo[-1]
+        file_name = f"foto_{photo.file_unique_id}.jpg"
+        mime_type = "image/jpeg"
+        file_obj = await context.bot.get_file(photo.file_id)
+
+    if not file_obj:
+        return
+
+    file_bytes = bytes(await file_obj.download_as_bytearray())
+
+    from src.kv import save_pending_file
+    await save_pending_file(chat_id, file_name, file_bytes, mime_type)
+
+    caption = (update.message.caption or "").strip()
+
+    user_name = "Teman"
+    if update.effective_user and update.effective_user.first_name:
+        user_name = update.effective_user.first_name
+
+    if caption:
+        await update.effective_chat.send_action("typing")
+        response = await chat_with_oline(
+            chat_id, caption, user_name=user_name, intent="drive"
+        )
+        await update.effective_chat.send_message(response)
+    else:
+        await update.effective_chat.send_message(
+            f"File/Foto '{file_name}' udah Oline terima nih! 📄✨\n\n"
+            "Mau Oline simpan ke folder mana di database? "
+            "(misal: \"simpan ke folder Skripsi\" atau \"simpan file ini\")"
+        )
+
+
+async def send_drive_file_to_telegram(
+    chat_id: int, file_bytes: bytes, file_name: str, mime_type: str
+) -> bool:
+    """
+    Mengirimkan file atau foto dari Google Drive kembali ke chat Telegram pengguna.
+    """
+    if not TELEGRAM_BOT_TOKEN:
+        return False
+
+    try:
+        from telegram import Bot
+
+        bot = Bot(token=TELEGRAM_BOT_TOKEN)
+
+        if "image" in mime_type.lower() or file_name.lower().endswith(
+            (".jpg", ".jpeg", ".png", ".webp", ".gif")
+        ):
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=file_bytes,
+                caption=f"📷 {file_name} dari Database Oline",
+            )
+        else:
+            await bot.send_document(
+                chat_id=chat_id,
+                document=file_bytes,
+                filename=file_name,
+                caption=f"📄 {file_name} dari Database Oline",
+            )
+        return True
+    except Exception as e:
+        logger.error("Failed to send Drive file to Telegram: %s", str(e))
+        return False
+
 
 
