@@ -60,10 +60,10 @@ def get_drive_service():
             token_uri="https://oauth2.googleapis.com/token",
             client_id=client_id,
             client_secret=client_secret,
-            scopes=SCOPES,
         )
 
         creds.refresh(Request())
+
 
         return build("drive", "v3", credentials=creds)
     except Exception as e:
