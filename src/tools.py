@@ -15,10 +15,12 @@ import httpx
 from src.kv import (
     get_journal_entries,
     get_monthly_tts_usage,
+    get_today_groq_usage,
     get_today_usage,
     save_journal,
     save_tts_usage,
 )
+
 from src.utils import format_date_indonesian, parse_relative_date
 from src.voice import (
     generate_elevenlabs_tts,
@@ -157,10 +159,11 @@ TOOL_DECLARATIONS = [
     {
         "name": "check_quota",
         "description": (
-            "Mengecek sisa kuota token Gemini API hari ini. "
+            "Mengecek sisa kuota token dan pemakaian API hari ini (Gemini API & Groq API). "
             "Gunakan saat pengguna bertanya tentang kuota, sisa token, "
             "pemakaian API, atau berapa banyak token yang sudah terpakai hari ini."
         ),
+
         "parameters": {
             "type": "object",
             "properties": {},
@@ -527,22 +530,36 @@ async def execute_get_journal_recap(
 
 async def execute_check_quota(chat_id: int) -> dict[str, Any]:
     """
-    Mengecek pemakaian token Gemini API hari ini dan menghitung sisa kuota.
-    Kuota harian free tier: 1.000.000 token.
+    Mengecek pemakaian token API (Gemini & Groq) hari ini dan menghitung sisa kuota.
+    Gemini daily limit: 1.000.000 token (1.500 req/hari).
+    Groq daily limit: 14.400.000 token (14.400 req/hari).
     """
-    DAILY_TOKEN_LIMIT = 1_000_000
+    GEMINI_LIMIT = 1_000_000
+    GROQ_LIMIT = 14_400_000
 
-    tokens_used = await get_today_usage(chat_id)
-    tokens_remaining = max(0, DAILY_TOKEN_LIMIT - tokens_used)
-    usage_percent = round((tokens_used / DAILY_TOKEN_LIMIT) * 100, 1)
+    gemini_used = await get_today_usage(chat_id)
+    groq_used = await get_today_groq_usage(chat_id)
+
+    gemini_remaining = max(0, GEMINI_LIMIT - gemini_used)
+    groq_remaining = max(0, GROQ_LIMIT - groq_used)
 
     return {
         "date": format_date_indonesian(datetime.now().strftime("%Y-%m-%d")),
-        "tokens_used": tokens_used,
-        "tokens_remaining": tokens_remaining,
-        "daily_limit": DAILY_TOKEN_LIMIT,
-        "usage_percent": usage_percent,
+        "groq_fast_path": {
+            "tokens_used": groq_used,
+            "tokens_remaining": groq_remaining,
+            "daily_limit": GROQ_LIMIT,
+            "usage_percent": round((groq_used / GROQ_LIMIT) * 100, 1),
+        },
+        "gemini_slow_path": {
+            "tokens_used": gemini_used,
+            "tokens_remaining": gemini_remaining,
+            "daily_limit": GEMINI_LIMIT,
+            "usage_percent": round((gemini_used / GEMINI_LIMIT) * 100, 1),
+        },
+        "total_tokens_used_today": gemini_used + groq_used,
     }
+
 
 
 async def execute_send_voice_message(chat_id: int, text: str) -> dict[str, Any]:

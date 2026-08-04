@@ -19,6 +19,7 @@ async def chat_groq(
     history: list[dict[str, Any]],
     user_message: str,
     max_retries: int = 3,
+    chat_id: Optional[int] = None,
 ) -> str:
     """
     Panggil Groq API untuk Fast Path.
@@ -64,9 +65,29 @@ async def chat_groq(
                 content = response.choices[0].message.content
                 if content and content.strip():
                     logger.info("Successfully received response from Groq (%s)", GROQ_MODEL)
+                    
+                    # Track Groq token usage
+                    if chat_id:
+                        try:
+                            from src.kv import save_groq_usage
+
+                            tokens_used = 0
+                            if hasattr(response, "usage") and response.usage:
+                                tokens_used = getattr(response.usage, "total_tokens", 0) or 0
+
+                            if tokens_used == 0:
+                                prompt_len = sum(len(m["content"]) for m in messages)
+                                resp_len = len(content)
+                                tokens_used = max(15, (prompt_len + resp_len) // 4)
+
+                            await save_groq_usage(chat_id, tokens_used)
+                        except Exception as kv_err:
+                            logger.warning("Failed to save Groq token usage: %s", str(kv_err))
+
                     return content.strip()
 
             raise ValueError("Groq returned empty response choices.")
+
 
         except Exception as e:
             last_exception = e

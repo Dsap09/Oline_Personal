@@ -293,7 +293,10 @@ async def chat_with_oline(
                 from src.groq import chat_groq
 
                 logger.info("Executing Fast Path via Groq API for chat_id: %s", chat_id)
-                groq_response = await chat_groq(system_prompt, history, user_message)
+                groq_response = await chat_groq(
+                    system_prompt, history, user_message, chat_id=chat_id
+                )
+
 
                 if groq_response:
                     # Update riwayat percakapan

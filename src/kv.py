@@ -19,7 +19,9 @@ JOURNAL_PREFIX = "jurnal"
 HISTORY_PREFIX = "history"
 RATE_PREFIX = "rate"
 USAGE_PREFIX = "gemini_usage"
+GROQ_USAGE_PREFIX = "groq_usage"
 TTS_PREFIX = "tts_usage"
+
 
 
 def _get_kv_credentials() -> tuple[str, str]:
@@ -217,7 +219,45 @@ async def get_today_usage(chat_id: int) -> int:
     return 0
 
 
+# --- Groq Usage Tracking ---
+
+async def save_groq_usage(chat_id: int, tokens: int) -> bool:
+    """
+    Menambahkan jumlah token terpakai hari ini untuk Groq API ke Vercel KV.
+    Key format: groq_usage:<chat_id>:YYYY-MM-DD
+    TTL 48 jam (172800 detik).
+    """
+    if tokens <= 0:
+        return True
+
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    key = f"{GROQ_USAGE_PREFIX}:{chat_id}:{date_str}"
+
+    result = await _kv_request(["INCRBY", key, str(tokens)])
+    if result is not None:
+        await _kv_request(["EXPIRE", key, "172800"])
+        return True
+    return False
+
+
+async def get_today_groq_usage(chat_id: int) -> int:
+    """
+    Mengambil total token Groq yang terpakai hari ini untuk chat_id tertentu.
+    """
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    key = f"{GROQ_USAGE_PREFIX}:{chat_id}:{date_str}"
+
+    result = await _kv_request(["GET", key])
+    if result and result.get("result"):
+        try:
+            return int(result["result"])
+        except (ValueError, TypeError):
+            return 0
+    return 0
+
+
 # --- ElevenLabs TTS Usage Tracking ---
+
 
 async def save_tts_usage(chat_id: int, char_count: int) -> bool:
     """
