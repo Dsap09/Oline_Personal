@@ -81,6 +81,13 @@ async def main():
     else:
         print(f"   [FAIL] Stock BBCA: {stock_res}")
 
+    bumi_res = await get_stock_price("BUMI")
+    if "formatted_result" in bumi_res:
+        print(f"   [SUCCESS] Stock BUMI: {bumi_res['formatted_result']}")
+    else:
+        print(f"   [FAIL] Stock BUMI: {bumi_res}")
+
+
     market_res = await get_market_summary()
     if "formatted_summary" in market_res:
         print(f"   [SUCCESS] Market Summary:\n{market_res['formatted_summary']}")

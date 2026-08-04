@@ -18,11 +18,12 @@ from telegram.ext import (
 
 from src.autocorrect_utils import correct_typo
 from src.gemini import chat_with_oline
-from src.kv import check_rate_limit, save_journal
+from src.kv import check_rate_limit, get_history, save_journal
 
 logger = logging.getLogger(__name__)
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+
 
 
 def create_application() -> Application:
@@ -136,6 +137,14 @@ async def handle_jurnal_command(
         )
 
 
+POPULAR_STOCK_TICKERS = [
+    "bbca", "bbri", "bmri", "bbni", "tlkm", "asii", "unvr", "adro", "antm", "icbp",
+    "indf", "bumi", "pgas", "wskt", "sido", "myrx", "goto", "buka", "ptba", "medc",
+    "emtk", "brpt", "tpia", "inkp", "tkim", "doid", "mbma", "mka", "hrum", "essa",
+    "aces", "bsde", "ctra", "smra", "pwon", "eraa", "cpin", "jpfa", "smgr", "intp",
+    "bren", "ammn", "cuan", "dewa", "film", "klbf", "mcap"
+]
+
 HEAVY_KEYWORDS = {
     "cuaca": ["cuaca", "hujan", "panas", "suhu", "cerah"],
     "rekomendasi": ["rekomendasi", "film", "lagu", "buku", "seri", "anime"],
@@ -143,9 +152,10 @@ HEAVY_KEYWORDS = {
     "jurnal": ["jurnal", "catat", "rekap jurnal"],
     "kuota": ["kuota", "token", "quota"],
     "search": ["cari", "search", "apa itu", "siapa", "kapan", "dimana", "berita", "definisi", "pengertian"],
-    "saham": ["saham", "ihsg", "indeks", "market", "gainer", "loser", "bbca", "bbri", "tlkm", "asii", "unvr", "adro", "antm", "icbp"],
+    "saham": [
+        "saham", "ihsg", "indeks", "index", "market", "bursa", "gainer", "loser",
+    ] + POPULAR_STOCK_TICKERS,
 }
-
 
 
 def detect_intent(text: str) -> str | None:
@@ -153,10 +163,43 @@ def detect_intent(text: str) -> str | None:
     Mendeteksi apakah pesan pengguna membutuhkan tools (heavy intent).
     Jika tidak ada kata kunci yang cocok, mengembalikan None (Fast Path).
     """
-    text_lower = text.lower()
+    text_lower = text.lower().strip()
+    words = text_lower.split()
+
+    # 1. Cek kata kunci persis/substring
     for intent, keywords in HEAVY_KEYWORDS.items():
         if any(kw in text_lower for kw in keywords):
             return intent
+
+    # 2. Deteksi otomatis kode saham 4 huruf standalone (misal: "BUMI", "BBCA")
+    if len(words) == 1 and len(words[0]) == 4 and words[0].isalpha():
+        return "saham"
+
+    return None
+
+
+async def detect_intent_async(text: str, chat_id: int | None = None) -> str | None:
+    """
+    Mendeteksi intent dengan konteks percakapan sebelumnya.
+    """
+    intent = detect_intent(text)
+    if intent:
+        return intent
+
+    # Jika pengguna mengirim pesan pendek (misal: 1-3 kata seperti "bumi", "bagaimana bumi"),
+    # dan percakapan sebelumnya membahas saham, klasifikasikan sebagai intent 'saham'.
+    if chat_id:
+        try:
+            words = text.strip().split()
+            if len(words) <= 3:
+                history = await get_history(chat_id)
+                if history:
+                    recent_texts = " ".join([m.get("text", "") for m in history[-3:]]).lower()
+                    if any(kw in recent_texts for kw in HEAVY_KEYWORDS["saham"]):
+                        return "saham"
+        except Exception as e:
+            logger.warning("Error checking history for intent context: %s", str(e))
+
     return None
 
 
@@ -192,8 +235,8 @@ async def handle_message(
         )
         return
 
-    # Deteksi intent untuk menentukan Fast Path / Slow Path
-    intent = detect_intent(user_message)
+    # Deteksi intent untuk menentukan Fast Path / Slow Path (dengan dukungan konteks percakapan)
+    intent = await detect_intent_async(user_message, chat_id)
 
     # Kirim "typing" action HANYA untuk Slow Path (fitur berat) untuk memangkas latensi Fast Path
     if intent is not None:
@@ -215,4 +258,5 @@ async def handle_message(
             await update.effective_chat.send_message(chunk)
     else:
         await update.effective_chat.send_message(response)
+
 
