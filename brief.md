@@ -1,191 +1,131 @@
 
-## Brief Fitur: Cek Saham & Pergerakan Market Harian (yfinance)
+## Brief Fitur: Integrasi Groq API untuk Fast Path (Hemat Kuota Gemini)
 
 ### 🎯 Tujuan
-Oline bisa menjawab pertanyaan seputar pergerakan pasar saham Indonesia hari itu, seperti:
-- "Olin, IHSG hari ini gimana?"
-- "Cek saham BBCA dong."
-- "Saham apa yang paling naik hari ini?"
+1. Menghemat kuota Gemini dengan memindahkan obrolan ringan (fast path) ke Groq.
+2. Menambah total kuota harian bot secara signifikan (Groq: 14.400 req/hari, Gemini: 1.500 req/hari).
+3. Membuat Oline lebih cepat merespons sapaan dan obrolan tanpa tools.
+4. Menyediakan fallback otomatis: jika Groq error/limit, lempar ke Gemini.
 
-Data diambil secara *real-time* dari Yahoo Finance, disampaikan dengan gaya natural Oline.
+### 🏗️ Arsitektur Dual API
 
-### 💰 Biaya
-- Library `yfinance` gratis, tanpa API key.
-- Tidak ada tambahan biaya operasional.
+| Jalur | API | Model | Tools? |
+|-------|-----|-------|--------|
+| **Fast Path** (sapaan, curhat, tanya umum) | **Groq** | `llama-3.1-8b-instant` | ❌ Tanpa tools |
+| **Slow Path** (butuh tools: cuaca, saham, dll.) | **Gemini** | `gemini-1.5-flash` | ✅ Dengan tools |
+| **Fallback** (jika Groq gagal) | **Gemini** | `gemini-1.5-flash` | ❌ Tanpa tools |
+
+Alur:
+```
+Pesan masuk → Intent detection
+├─ Fast Path (tanpa tools) → Groq → berhasil? → balas
+│                                      └─ gagal? → Gemini (fallback)
+└─ Slow Path (butuh tools) → Gemini + tools → balas
+```
 
 ### 🛠️ Langkah Implementasi
 
-#### 1. Tambahkan Dependensi
+#### 1. Dapatkan API Key Groq
+- Daftar di [console.groq.com](https://console.groq.com).
+- Buat API key, simpan sebagai environment variable di Vercel:
+  - `GROQ_API_KEY` = `gsk_...`
+
+#### 2. Tambahkan Dependensi
 Di `requirements.txt`:
 ```
-yfinance>=0.2.54
-pandas
+groq
 ```
 
-#### 2. Definisikan Tools untuk Gemini
-Tambahkan dua tools baru di file tempat definisi tools disimpan:
-
-**a. `get_stock_price`** — Cek satu saham spesifik.
-```python
-{
-    "name": "get_stock_price",
-    "description": "Ambil harga terkini dan perubahan harian suatu saham Indonesia. Kode saham 4 huruf (contoh: BBCA, BBRI).",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "ticker": {
-                "type": "string",
-                "description": "Kode saham 4 huruf, tanpa .JK (misal: BBCA, TLKM, BBRI)"
-            }
-        },
-        "required": ["ticker"]
-    }
-}
-```
-
-**b. `get_market_summary`** — Ringkasan IHSG dan top movers.
-```python
-{
-    "name": "get_market_summary",
-    "description": "Ambil ringkasan pergerakan IHSG hari ini: nilai indeks, perubahan, dan saham top gainer/loser.",
-    "parameters": {
-        "type": "object",
-        "properties": {},
-        "required": []
-    }
-}
-```
-
-#### 3. Buat Handler di `tools.py`
+#### 3. Buat File Baru `src/groq.py`
+Fungsi untuk memanggil Groq dengan retry dan fallback:
 
 ```python
-import yfinance as yf
-import pandas as pd
-import time
+import os
+from groq import Groq
 
-def get_stock_price(ticker: str) -> str:
-    ticker = ticker.upper().strip()
-    if not ticker.endswith('.JK') and ticker.isalpha() and len(ticker) == 4:
-        ticker += '.JK'
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+GROQ_MODEL = "llama-3.1-8b-instant"
+
+async def chat_groq(system_prompt: str, history: list, user_message: str) -> str:
+    """Panggil Groq untuk fast path. Return teks respons atau raise exception."""
+    messages = [{"role": "system", "content": system_prompt}]
     
-    time.sleep(0.5)  # Jeda kecil
+    # Tambahkan riwayat (maks 5 pasang)
+    for h in history[-10:]:
+        messages.append(h)
     
+    messages.append({"role": "user", "content": user_message})
+    
+    response = client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=messages,
+        temperature=0.9,
+        max_tokens=1024
+    )
+    
+    return response.choices[0].message.content
+```
+
+**Catatan:** Jika ingin retry logic, bisa ditambahkan di sini (exponential backoff).
+
+#### 4. Modifikasi `handlers.py` — Pisah Jalur Fast & Slow
+
+Di bagian handler pesan, setelah intent detection:
+
+```python
+from src.groq import chat_groq
+from src.gemini import chat_with_oline  # yang sudah ada
+
+# ... setelah dapat intent ...
+
+if intent is None:  # Fast Path
     try:
-        stock = yf.Ticker(ticker)
-        data = stock.history(period='1d')
-        if data.empty:
-            return f"Data {ticker} kosong. Mungkin kode salah atau market lagi tutup ya~"
-        
-        latest = data['Close'].iloc[-1]
-        prev_close = stock.info.get('previousClose', latest)
-        change = latest - prev_close
-        change_pct = (change / prev_close) * 100
-        
-        return (
-            f"{ticker.replace('.JK','')} sekarang Rp {latest:,.0f} "
-            f"({'📈 +' if change >= 0 else '📉 '}{change:,.0f}, "
-            f"{'+' if change >= 0 else ''}{change_pct:.2f}%)"
+        response = await chat_groq(SYSTEM_PROMPT, history, user_text)
+    except Exception as e:
+        log.warning(f"Groq failed: {e}, fallback to Gemini")
+        response = await chat_with_oline(
+            SYSTEM_PROMPT, history, user_text, tools=None  # Tanpa tools
         )
-    except Exception as e:
-        return f"Gagal ambil data {ticker}: {e}"
-
-
-def get_market_summary() -> str:
-    time.sleep(0.5)
-    
-    try:
-        ihsg = yf.Ticker('^JKSE')
-        data = ihsg.history(period='1d')
-        if data.empty:
-            return "Data IHSG belum tersedia hari ini."
-        
-        latest = data['Close'].iloc[-1]
-        prev_close = ihsg.info.get('previousClose', latest)
-        change = latest - prev_close
-        change_pct = (change / prev_close) * 100
-        
-        lines = [
-            f"IHSG: Rp {latest:,.0f} "
-            f"({'📈 +' if change >= 0 else '📉 '}{change:,.0f}, "
-            f"{'+' if change >= 0 else ''}{change_pct:.2f}%)"
-        ]
-        
-        # Top gainer/loser (optional)
-        top_gainer = get_top_movers(True)
-        top_loser = get_top_movers(False)
-        if top_gainer:
-            lines.append(f"Top Gainer: {top_gainer}")
-        if top_loser:
-            lines.append(f"Top Loser: {top_loser}")
-        
-        return "\n".join(lines)
-    except Exception as e:
-        return f"Gagal ambil data IHSG: {e}"
-
-
-def get_top_movers(is_gainer=True, limit=3):
-    """Ambil top gainer atau loser dari IHSG, dengan fallback."""
-    try:
-        tickers = ['BBCA', 'BBRI', 'TLKM', 'ASII', 'UNVR', 'ADRO', 'ANTM', 'ICBP']
-        movers = []
-        for t in tickers:
-            stock = yf.Ticker(t + '.JK')
-            data = stock.history(period='1d')
-            if not data.empty:
-                close = data['Close'].iloc[-1]
-                prev = stock.info.get('previousClose', close)
-                pct = ((close - prev) / prev) * 100
-                movers.append((t, pct))
-        movers.sort(key=lambda x: x[1], reverse=is_gainer)
-        return ", ".join([f"{m[0]} ({'+' if m[1]>=0 else ''}{m[1]:.1f}%)" for m in movers[:limit]])
-    except:
-        return ""
+else:  # Slow Path
+    tools = TOOLS_BY_INTENT.get(intent, [])
+    response = await chat_with_oline(
+        SYSTEM_PROMPT, history, user_text, tools=tools
+    )
 ```
 
-**Catatan:** `get_top_movers` menggunakan daftar saham populer karena Yahoo Finance tidak menyediakan endpoint top mover resmi untuk IHSG. Bisa diperluas daftarnya nanti.
+**Penting:** Pastikan `chat_with_oline` di `gemini.py` menerima parameter `tools=None` agar bisa dipanggil tanpa tools untuk fallback.
 
-#### 4. Integrasikan ke Fast Path
-Di `handlers.py`, tambahkan intent "saham" ke `HEAVY_KEYWORDS`:
-```python
-"saham": ["saham", "ihsg", "bbc", "bbri", "tlkm", "asii", "unvr", "adro", "index", "market", "gainer", "loser"]
-```
-Dan mapping tools:
-```python
-TOOLS_BY_INTENT["saham"] = [get_stock_price_tool, get_market_summary_tool]
-```
+#### 5. Penanganan Rate Limit & Retry
+- Groq: tambahkan retry dengan exponential backoff (1s, 2s, 4s) di `chat_groq`. Jika tetap gagal, lempar exception agar fallback ke Gemini.
+- Gemini: sudah ada retry, pastikan tetap berfungsi.
 
-#### 5. Perbarui System Prompt
-Di `personas.py`, tambahkan:
-```
-- Jika pengguna bertanya tentang saham, IHSG, atau pergerakan market, gunakan tool get_stock_price atau get_market_summary.
-- Sampaikan dengan gaya Oline yang santai. Jangan pakai format laporan kaku.
-- Jika market sedang tutup (akhir pekan/libur), beri tahu dengan ramah.
-```
+#### 6. System Prompt yang Sama
+Gunakan system prompt Oline yang sama persis (dari `personas.py`) untuk Groq dan Gemini, agar karakter Oline konsisten.
 
-#### 6. Chat Action
-Kirim `sendChatAction` dengan `action="typing"` saat mengeksekusi tools saham, agar user tahu Oline sedang mengecek.
-
-### 🧪 Contoh Percakapan
-```
-User: Olin, IHSG hari ini gimana?
-Oline: IHSG hari ini di 7.250, naik 45 poin (+0,62%) 📈
-       Top gainer: BBCA (+2.1%), TLKM (+1.8%), ASII (+1.2%)
-       Lumayan hijau ya bestie~
-
-User: Cek saham BBRI dong
-Oline: BBRI sekarang Rp 5.800, turun 25 poin (-0,43%) 📉
-       Masih mending sih, gak nyungsep banget~
-```
+#### 7. (Opsional) Monitoring Kuota Groq
+Header respons Groq mengandung `x-ratelimit-remaining-requests`. Bisa disimpan ke Vercel KV untuk fitur "cek kuota" nanti. Tapi ini bisa menyusul.
 
 ### 📁 File yang Perlu Diubah/Dibuat
-- `requirements.txt` — tambahkan `yfinance`, `pandas`
-- `src/tools.py` — tambahkan handler saham
-- `src/gemini.py` atau file tools definition — daftarkan tool baru
-- `src/handlers.py` — tambahkan intent dan mapping tools
-- `src/personas.py` — update system prompt
+| File | Aksi |
+|------|------|
+| `requirements.txt` | Tambahkan `groq` |
+| `src/groq.py` | **Baru** — client Groq + fungsi `chat_groq` |
+| `src/handlers.py` | Ubah — pisah fast path (Groq) dan slow path (Gemini), tambah fallback |
+| `src/gemini.py` | Pastikan `chat_with_oline` bisa dipanggil dengan `tools=None` |
+| Environment Vercel | Tambahkan `GROQ_API_KEY` |
 
-### ⚠️ Catatan
-- **Rate Limit**: Sudah diberi jeda 0,5 detik per panggilan. Aman untuk pemakaian pribadi.
-- **Market Tutup**: yfinance tetap bisa mengembalikan data terakhir. Oline bisa bilang "Ini data terakhir sebelum tutup ya~"
-- **Saham tidak dikenal**: Fallback error akan dikembalikan dengan ramah.
-- **Tetap gratis**: Tidak ada biaya tambahan.
+### 🧪 Contoh Percakapan (Fast Path via Groq)
+```
+User: halo lin
+Oline: (Groq) haii! tumben nongol, ada cerita apa hari ini? ✨
+
+User: aku lagi bete nih
+Oline: (Groq) lah kenapa bestie? spill dong, siapa tau aku bisa bantu~ 😔
+```
+
+### ⚠️ Catatan Penting
+- **Model Groq:** `llama-3.1-8b-instant` dipilih karena gratis, cepat, dan kuota besar. Jangan gunakan model besar di fast path.
+- **Function calling:** Tetap di Gemini. Groq tidak akan menerima tools di tahap ini.
+- **Fallback:** Jika Groq down atau limit, Oline tetap bisa jawab lewat Gemini. User tidak akan merasakan perbedaan.
+- **Biaya:** Tetap gratis. Groq free tier cukup untuk penggunaan pribadi.

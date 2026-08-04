@@ -287,7 +287,27 @@ async def chat_with_oline(
         # 2. Build system prompt
         system_prompt = _build_system_prompt(memory, user_name=user_name)
 
-        # 3. Buat tools yang terfilter sesuai intent (Fast Path: tools = None)
+        # 2.5 Fast Path via Groq API (jika intent None dan GROQ_API_KEY diset)
+        if intent is None and os.environ.get("GROQ_API_KEY", "").strip():
+            try:
+                from src.groq import chat_groq
+
+                logger.info("Executing Fast Path via Groq API for chat_id: %s", chat_id)
+                groq_response = await chat_groq(system_prompt, history, user_message)
+
+                if groq_response:
+                    # Update riwayat percakapan
+                    history.append({"role": "user", "text": user_message})
+                    history.append({"role": "model", "text": groq_response})
+                    await save_history(chat_id, history)
+                    return groq_response
+            except Exception as e:
+                logger.warning(
+                    "Groq Fast Path failed (%s). Falling back to Gemini...", str(e)
+                )
+
+        # 3. Buat tools yang terfilter sesuai intent (Fast Path Gemini fallback: tools = None)
+
         tool_declarations = get_tools_for_intent(intent)
         tools = _build_tools(tool_declarations)
 
