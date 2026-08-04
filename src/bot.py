@@ -16,8 +16,8 @@ from telegram.ext import (
     filters,
 )
 
-from src.autocorrect_utils import correct_typo
 from src.gemini import chat_with_oline
+
 from src.kv import check_rate_limit, get_history, save_journal
 
 logger = logging.getLogger(__name__)
@@ -219,16 +219,8 @@ async def handle_message(
     if not user_message:
         return
 
-    # Auto-correct typo ringan sebelum pemrosesan
-    try:
-        corrected = correct_typo(user_message)
-        if corrected and corrected != user_message:
-            logger.info("Typo corrected: '%s' -> '%s'", user_message, corrected)
-            user_message = corrected
-    except Exception as e:
-        logger.warning("Autocorrect error: %s", str(e))
-
     # Rate limiting
+
     if not await check_rate_limit(chat_id):
         await update.effective_chat.send_message(
             "sabar ya, kamu udah kebanyakan chat 😅 tunggu sebentar lagi."
