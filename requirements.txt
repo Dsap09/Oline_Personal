@@ -6,6 +6,9 @@ pydub>=0.25.1
 requests>=2.31.0
 ddgs>=9.14.0
 pyspellchecker>=0.8.0
+yfinance>=0.2.54
+pandas>=2.0.0
+
 
 
 

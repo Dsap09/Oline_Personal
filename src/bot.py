@@ -84,6 +84,7 @@ async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         "🎬 *Rekomendasi Film* — \"rekomendasiin film horor\"\n"
         "🎵 *Rekomendasi Lagu* — \"cari lagu chill indonesia\"\n"
         "🌤️ *Cek Cuaca* — \"cuaca besok di Bandung\"\n"
+        "📈 *Saham & IHSG* — \"cek saham BBCA\" / \"IHSG hari ini gimana\"\n"
         "📔 *Jurnal* — /jurnal [catatan] atau \"catat jurnal hari ini: ...\"\n"
         "📋 *Rekap Jurnal* — \"rekap jurnal minggu ini\"\n\n"
         "semua bisa pakai bahasa biasa, aku otomatis ngerti kok 😌"
@@ -142,7 +143,9 @@ HEAVY_KEYWORDS = {
     "jurnal": ["jurnal", "catat", "rekap jurnal"],
     "kuota": ["kuota", "token", "quota"],
     "search": ["cari", "search", "apa itu", "siapa", "kapan", "dimana", "berita", "definisi", "pengertian"],
+    "saham": ["saham", "ihsg", "indeks", "market", "gainer", "loser", "bbca", "bbri", "tlkm", "asii", "unvr", "adro", "antm", "icbp"],
 }
+
 
 
 def detect_intent(text: str) -> str | None:

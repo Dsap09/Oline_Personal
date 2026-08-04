@@ -16,14 +16,20 @@ load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.tools import (
+    get_market_summary,
     get_movie_recommendation,
     get_music_recommendation,
+    get_stock_price,
     get_weather_forecast,
 )
 
 
+
 async def main():
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     print("=== Testing Oline Tools & API Keys ===")
+
 
     # 1. iTunes API Test (No key required)
     print("\n1. Testing iTunes Search API (Music)...")
@@ -67,7 +73,22 @@ async def main():
     else:
         print("   [SKIPPED] ELEVENLABS_API_KEY environment variable is not set.")
 
+    # 5. yfinance Stock Test (BBCA & IHSG)
+    print("\n5. Testing yfinance Stock & Market API...")
+    stock_res = await get_stock_price("BBCA")
+    if "formatted_result" in stock_res:
+        print(f"   [SUCCESS] Stock BBCA: {stock_res['formatted_result']}")
+    else:
+        print(f"   [FAIL] Stock BBCA: {stock_res}")
+
+    market_res = await get_market_summary()
+    if "formatted_summary" in market_res:
+        print(f"   [SUCCESS] Market Summary:\n{market_res['formatted_summary']}")
+    else:
+        print(f"   [FAIL] Market Summary: {market_res}")
+
     print("\n=== Test Completed ===")
+
 
 
 if __name__ == "__main__":

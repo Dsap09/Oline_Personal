@@ -202,6 +202,34 @@ TOOL_DECLARATIONS = [
             "required": ["query"],
         },
     },
+    {
+        "name": "get_stock_price",
+        "description": (
+            "Ambil harga terkini dan perubahan harian suatu saham Indonesia. "
+            "Kode saham 4 huruf (contoh: BBCA, BBRI, TLKM)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ticker": {
+                    "type": "string",
+                    "description": "Kode saham 4 huruf, tanpa .JK (misal: BBCA, TLKM, BBRI).",
+                }
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "get_market_summary",
+        "description": (
+            "Ambil ringkasan pergerakan IHSG hari ini: nilai indeks, perubahan, dan saham top gainer/loser."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
 ]
 
 TOOLS_BY_INTENT = {
@@ -211,7 +239,9 @@ TOOLS_BY_INTENT = {
     "jurnal": ["save_journal_entry", "get_journal_recap"],
     "kuota": ["check_quota"],
     "search": ["search_internet"],
+    "saham": ["get_stock_price", "get_market_summary"],
 }
+
 
 
 def get_tools_for_intent(intent: Optional[str]) -> list[dict]:
@@ -610,6 +640,121 @@ async def search_internet(query: str) -> dict[str, Any]:
         return {"error": "Aduh, Oline lagi gak bisa akses internet nih. Coba lagi nanti ya~"}
 
 
+def _get_top_movers(is_gainer: bool = True, limit: int = 3) -> str:
+    """Ambil top gainer atau loser dari saham populer IHSG, dengan fallback."""
+    import yfinance as yf
+    try:
+        tickers = ['BBCA', 'BBRI', 'TLKM', 'ASII', 'UNVR', 'ADRO', 'ANTM', 'ICBP']
+        movers = []
+        for t in tickers:
+            stock = yf.Ticker(t + '.JK')
+            data = stock.history(period='1d')
+            if not data.empty:
+                close = float(data['Close'].iloc[-1])
+                prev = float(stock.info.get('previousClose', close))
+                pct = ((close - prev) / prev) * 100 if prev else 0.0
+                movers.append((t, pct))
+        movers.sort(key=lambda x: x[1], reverse=is_gainer)
+        return ", ".join([f"{m[0]} ({'+' if m[1]>=0 else ''}{m[1]:.1f}%)" for m in movers[:limit]])
+    except Exception as e:
+        logger.warning("Error fetching top movers: %s", str(e))
+        return ""
+
+
+async def get_stock_price(ticker: str) -> dict[str, Any]:
+    """
+    Mengecek harga terkini dan perubahan harian suatu saham Indonesia via yfinance.
+    """
+    import yfinance as yf
+    import time
+
+    ticker_clean = ticker.upper().strip()
+    full_ticker = ticker_clean
+    if not full_ticker.endswith('.JK') and full_ticker.isalpha() and len(full_ticker) == 4:
+        full_ticker += '.JK'
+
+    def _fetch():
+        time.sleep(0.5)
+        stock = yf.Ticker(full_ticker)
+        data = stock.history(period='1d')
+        if data.empty:
+            return {"error": f"Data {ticker_clean} kosong. Mungkin kode salah atau market lagi tutup ya~"}
+
+        latest = float(data['Close'].iloc[-1])
+        prev_close = float(stock.info.get('previousClose', latest))
+        change = latest - prev_close
+        change_pct = (change / prev_close) * 100 if prev_close else 0.0
+
+        formatted = (
+            f"{ticker_clean} sekarang Rp {latest:,.0f} "
+            f"({'📈 +' if change >= 0 else '📉 '}{change:,.0f}, "
+            f"{'+' if change >= 0 else ''}{change_pct:.2f}%)"
+        )
+        return {
+            "ticker": ticker_clean,
+            "latest_price": latest,
+            "prev_close": prev_close,
+            "change": change,
+            "change_pct": change_pct,
+            "formatted_result": formatted,
+        }
+
+    try:
+        return await asyncio.to_thread(_fetch)
+    except Exception as e:
+        logger.error("Error getting stock price for %s: %s", ticker, str(e))
+        return {"error": f"Gagal ambil data {ticker_clean}: {str(e)}"}
+
+
+async def get_market_summary() -> dict[str, Any]:
+    """
+    Mengecek ringkasan pergerakan IHSG hari ini dan top movers via yfinance.
+    """
+    import yfinance as yf
+    import time
+
+    def _fetch():
+        time.sleep(0.5)
+        ihsg = yf.Ticker('^JKSE')
+        data = ihsg.history(period='1d')
+        if data.empty:
+            return {"error": "Data IHSG belum tersedia hari ini."}
+
+        latest = float(data['Close'].iloc[-1])
+        prev_close = float(ihsg.info.get('previousClose', latest))
+        change = latest - prev_close
+        change_pct = (change / prev_close) * 100 if prev_close else 0.0
+
+        lines = [
+            f"IHSG: Rp {latest:,.0f} "
+            f"({'📈 +' if change >= 0 else '📉 '}{change:,.0f}, "
+            f"{'+' if change >= 0 else ''}{change_pct:.2f}%)"
+        ]
+
+        top_gainer = _get_top_movers(is_gainer=True)
+        top_loser = _get_top_movers(is_gainer=False)
+        if top_gainer:
+            lines.append(f"Top Gainer: {top_gainer}")
+        if top_loser:
+            lines.append(f"Top Loser: {top_loser}")
+
+        return {
+            "index_name": "IHSG",
+            "latest_price": latest,
+            "change": change,
+            "change_pct": change_pct,
+            "top_gainer": top_gainer,
+            "top_loser": top_loser,
+            "formatted_summary": "\n".join(lines),
+        }
+
+    try:
+        return await asyncio.to_thread(_fetch)
+    except Exception as e:
+        logger.error("Error getting market summary: %s", str(e))
+        return {"error": f"Gagal ambil data IHSG: {str(e)}"}
+
+
 # Map nama tool ke executor function
 TOOL_EXECUTORS = {
     "get_movie_recommendation": get_movie_recommendation,
@@ -620,4 +765,7 @@ TOOL_EXECUTORS = {
     "check_quota": execute_check_quota,
     "send_voice_message": execute_send_voice_message,
     "search_internet": search_internet,
+    "get_stock_price": get_stock_price,
+    "get_market_summary": get_market_summary,
 }
+
