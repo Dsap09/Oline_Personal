@@ -91,6 +91,27 @@ class TestDriveIntegration(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(res["total_found"], 1)
             self.assertIn("📄 Draft_Bab1.pdf", res["results"])
 
+    @patch("google.auth.transport.requests.Request")
+    @patch("google.oauth2.credentials.Credentials")
+    @patch("googleapiclient.discovery.build")
+    def test_get_drive_service_oauth(self, mock_build, mock_creds_cls, mock_request):
+        """Tes inisialisasi get_drive_service via OAuth 2.0."""
+        from src.drive import get_drive_service
+
+        mock_creds_inst = MagicMock()
+        mock_creds_cls.return_value = mock_creds_inst
+
+        with patch.dict(os.environ, {
+            "GOOGLE_DRIVE_REFRESH_TOKEN": "mock_refresh_token",
+            "GOOGLE_DRIVE_CLIENT_ID": "mock_client_id",
+            "GOOGLE_DRIVE_CLIENT_SECRET": "mock_client_secret",
+        }):
+            service = get_drive_service()
+            mock_creds_cls.assert_called_once()
+            mock_creds_inst.refresh.assert_called_once()
+            mock_build.assert_called_once_with("drive", "v3", credentials=mock_creds_inst)
+
 
 if __name__ == "__main__":
     unittest.main()
+

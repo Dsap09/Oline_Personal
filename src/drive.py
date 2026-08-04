@@ -23,49 +23,53 @@ def get_drive_folder_id() -> str:
 
 def get_drive_service():
     """
-    Inisialisasi dan mengembalikan service Google Drive v3.
-    Mendukung JSON dari environment variable GOOGLE_DRIVE_CREDENTIALS
-    atau fallback ke file JSON lokal di folder api/ jika ada.
+    Inisialisasi dan mengembalikan service Google Drive v3 menggunakan OAuth 2.0 User Refresh Token.
+    Menggunakan akun pribadi pemilik bot sehingga file tersimpan menggunakan kuota 15 GB pribadi.
     """
-    creds_json = os.environ.get("GOOGLE_DRIVE_CREDENTIALS", "").strip()
-    creds_dict = None
+    refresh_token = os.environ.get("GOOGLE_DRIVE_REFRESH_TOKEN", "").strip()
+    client_id = os.environ.get("GOOGLE_DRIVE_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("GOOGLE_DRIVE_CLIENT_SECRET", "").strip()
 
-    if creds_json:
-        try:
-            creds_dict = json.loads(creds_json)
-        except json.JSONDecodeError as e:
-            logger.error("Failed to parse GOOGLE_DRIVE_CREDENTIALS JSON: %s", str(e))
+    if not (refresh_token and client_id and client_secret):
+        # Fallback: Coba Service Account jika OAuth belum diisi
+        creds_json = os.environ.get("GOOGLE_DRIVE_CREDENTIALS", "").strip()
+        if creds_json:
+            try:
+                creds_dict = json.loads(creds_json)
+                from google.oauth2.service_account import Credentials
+                from googleapiclient.discovery import build
 
-    if not creds_dict:
-        # Fallback ke file JSON lokal di directory api/ jika ada
-        api_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "api")
-        if os.path.exists(api_dir):
-            for file in os.listdir(api_dir):
-                if file.endswith(".json") and "serviceaccount" in file.lower() or "project" in file.lower():
-                    json_path = os.path.join(api_dir, file)
-                    try:
-                        with open(json_path, "r", encoding="utf-8") as f:
-                            creds_dict = json.load(f)
-                            logger.info("Loaded Google Drive service account from local file: %s", file)
-                            break
-                    except Exception as fe:
-                        logger.warning("Could not read local JSON file %s: %s", file, str(fe))
+                creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+                return build("drive", "v3", credentials=creds)
+            except Exception as e:
+                logger.warning("Service Account fallback failed: %s", str(e))
 
-    if not creds_dict:
         raise ValueError(
-            "GOOGLE_DRIVE_CREDENTIALS environment variable is not configured "
-            "and no valid local service account JSON file was found."
+            "OAuth 2.0 credentials (GOOGLE_DRIVE_REFRESH_TOKEN, GOOGLE_DRIVE_CLIENT_ID, "
+            "GOOGLE_DRIVE_CLIENT_SECRET) environment variables are not configured."
         )
 
     try:
-        from google.oauth2.service_account import Credentials
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
         from googleapiclient.discovery import build
 
-        creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+        creds = Credentials(
+            token=None,
+            refresh_token=refresh_token,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=client_id,
+            client_secret=client_secret,
+            scopes=SCOPES,
+        )
+
+        creds.refresh(Request())
+
         return build("drive", "v3", credentials=creds)
     except Exception as e:
-        logger.error("Failed to initialize Google Drive service: %s", str(e))
-        raise RuntimeError(f"Gagal menginisialisasi Google Drive API: {str(e)}")
+        logger.error("Failed to initialize Google Drive OAuth 2.0 service: %s", str(e))
+        raise RuntimeError(f"Gagal menginisialisasi Google Drive API via OAuth 2.0: {str(e)}")
+
 
 
 def find_folder(service, folder_name: str, parent_id: Optional[str] = None) -> Optional[str]:
