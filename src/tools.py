@@ -545,20 +545,24 @@ async def execute_check_quota(chat_id: int) -> dict[str, Any]:
 
     return {
         "date": format_date_indonesian(datetime.now().strftime("%Y-%m-%d")),
-        "groq_fast_path": {
-            "tokens_used": groq_used,
-            "tokens_remaining": groq_remaining,
-            "daily_limit": GROQ_LIMIT,
-            "usage_percent": round((groq_used / GROQ_LIMIT) * 100, 1),
-        },
-        "gemini_slow_path": {
-            "tokens_used": gemini_used,
-            "tokens_remaining": gemini_remaining,
-            "daily_limit": GEMINI_LIMIT,
-            "usage_percent": round((gemini_used / GEMINI_LIMIT) * 100, 1),
-        },
+        "groq_fast_path": (
+            f"⚡ Groq API (Fast Path / Sapaan): {groq_used:,} / {GROQ_LIMIT:,} token "
+            f"({round((groq_used / GROQ_LIMIT) * 100, 1)}%), sisa {groq_remaining:,} token"
+        ),
+        "gemini_slow_path": (
+            f"🛠️ Gemini API (Slow Path / Tools): {gemini_used:,} / {GEMINI_LIMIT:,} token "
+            f"({round((gemini_used / GEMINI_LIMIT) * 100, 1)}%), sisa {gemini_remaining:,} token"
+        ),
+        "groq_tokens_used": groq_used,
+        "groq_tokens_remaining": groq_remaining,
+        "groq_daily_limit": GROQ_LIMIT,
+        "gemini_tokens_used": gemini_used,
+        "gemini_tokens_remaining": gemini_remaining,
+        "gemini_daily_limit": GEMINI_LIMIT,
         "total_tokens_used_today": gemini_used + groq_used,
+        "note": "WAJIB tampilkan sisa kuota kedua API (Groq Fast Path dan Gemini Slow Path) secara terpisah di baris berbeda.",
     }
+
 
 
 
