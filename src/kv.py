@@ -294,28 +294,28 @@ async def get_monthly_tts_usage(chat_id: int) -> int:
     return 0
 
 
-# --- Rate Limiting ---
-
-async def check_rate_limit(chat_id: int, max_requests: int = 15) -> bool:
+async def check_rate_limit(chat_id: int, max_requests: int = 25) -> bool:
     """
-    Rate limiting sederhana: maks `max_requests` pesan per menit per chat_id.
+    Rate limiting: maks `max_requests` pesan per menit per chat_id.
     Returns True jika masih dalam batas, False jika melebihi.
     """
     key = f"{RATE_PREFIX}:{chat_id}"
-    result = await _kv_request(["GET", key])
 
-    current_count = 0
-    if result and result.get("result"):
-        try:
-            current_count = int(result["result"])
-        except (ValueError, TypeError):
-            current_count = 0
+    result = await _kv_request(["INCR", key])
+    if not result or "result" not in result:
+        return True
 
-    if current_count >= max_requests:
+    try:
+        current_count = int(result["result"])
+    except (ValueError, TypeError):
+        return True
+
+    # Jika pesan pertama di window ini, set TTL 60 detik
+    if current_count == 1:
+        await _kv_request(["EXPIRE", key, "60"])
+
+    if current_count > max_requests:
         return False
 
-    # Increment counter dengan TTL 60 detik
-    await _kv_request(["SET", key, str(current_count + 1), "EX", "60", "NX"])
-    await _kv_request(["INCR", key])
-
     return True
+
