@@ -73,16 +73,34 @@ async def chat_groq(
 
                             tokens_used = 0
                             if hasattr(response, "usage") and response.usage:
-                                tokens_used = getattr(response.usage, "total_tokens", 0) or 0
+                                usage = response.usage
+                                if isinstance(usage, dict):
+                                    tokens_used = usage.get("total_tokens", 0) or (
+                                        usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)
+                                    )
+                                else:
+                                    tokens_used = getattr(usage, "total_tokens", 0) or (
+                                        getattr(usage, "prompt_tokens", 0) + getattr(usage, "completion_tokens", 0)
+                                    )
 
                             if tokens_used == 0:
-                                prompt_len = sum(len(m["content"]) for m in messages)
-                                resp_len = len(content)
+                                prompt_len = sum(
+                                    len(str(m.get("content", "")))
+                                    for m in messages
+                                    if isinstance(m, dict)
+                                )
+                                resp_len = len(content) if content else 100
                                 tokens_used = max(15, (prompt_len + resp_len) // 4)
 
+                            logger.info(
+                                "Saving Groq token usage for chat_id %s: %d tokens",
+                                chat_id,
+                                tokens_used,
+                            )
                             await save_groq_usage(chat_id, tokens_used)
                         except Exception as kv_err:
                             logger.warning("Failed to save Groq token usage: %s", str(kv_err))
+
 
                     return content.strip()
 
