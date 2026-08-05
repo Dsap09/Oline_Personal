@@ -298,30 +298,61 @@ async def get_monthly_tts_usage(chat_id: int) -> int:
     return 0
 
 
+async def _kv_pipeline(commands: list[list[str]]) -> list | None:
+    """
+    Mengirim multiple command Redis sekaligus (pipeline) ke Vercel KV / Upstash Redis REST API.
+    """
+    kv_url, kv_token = _get_kv_credentials()
+    if not kv_url or not kv_token:
+        logger.warning("Vercel KV / Upstash Redis credentials not configured. Skipping KV operation.")
+        return None
+
+    url = f"{kv_url}/pipeline"
+    headers = {
+        "Authorization": f"Bearer {kv_token}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            response = await client.post(url, headers=headers, json=commands)
+            response.raise_for_status()
+            return response.json()
+    except Exception as e:
+        logger.error("KV pipeline operation error: %s", str(e))
+        return None
+
+
 async def check_rate_limit(chat_id: int, max_requests: int = 25) -> bool:
     """
     Rate limiting: maks `max_requests` pesan per menit per chat_id.
     Returns True jika masih dalam batas, False jika melebihi.
+    Pemeriksaan TTL dilakukan secara otomatis untuk mencegah key tersimpan permanen tanpa expiration.
     """
     key = f"{RATE_PREFIX}:{chat_id}"
 
-    result = await _kv_request(["INCR", key])
-    if not result or "result" not in result:
+    # Jalankan INCR dan TTL sekaligus dalam 1 request pipeline
+    res = await _kv_pipeline([["INCR", key], ["TTL", key]])
+    if not res or not isinstance(res, list) or len(res) < 2:
         return True
 
     try:
-        current_count = int(result["result"])
+        current_count = int(res[0].get("result", 0)) if isinstance(res[0], dict) else 0
+        ttl = int(res[1].get("result", -2)) if isinstance(res[1], dict) else -2
     except (ValueError, TypeError):
         return True
 
-    # Jika pesan pertama di window ini, set TTL 60 detik
-    if current_count == 1:
+    # Jika key baru (count == 1) atau TTL = -1 (stuck tanpa expiration), set TTL 60 detik
+    if current_count == 1 or ttl == -1:
         await _kv_request(["EXPIRE", key, "60"])
 
     if current_count > max_requests:
+        if ttl <= 0:
+            await _kv_request(["EXPIRE", key, "60"])
         return False
 
     return True
+
 
 
 # --- Pending File Cache for Telegram Uploads ---
