@@ -5,6 +5,7 @@ Dilengkapi retry mechanism (exponential backoff) dan fallback exception.
 """
 
 import asyncio
+import json
 import logging
 import os
 from typing import Any, Optional
@@ -122,3 +123,179 @@ async def chat_groq(
     if last_exception:
         raise last_exception
     raise RuntimeError("Groq API request failed after retries.")
+
+
+async def chat_groq_with_tools(
+    system_prompt: str,
+    history: list[dict[str, Any]],
+    user_message: str,
+    tools: list[dict[str, Any]],
+    max_retries: int = 3,
+    chat_id: Optional[int] = None,
+) -> str:
+    """
+    Panggil Groq API untuk Slow Path Fallback dengan Function Calling.
+    Jika Groq memutuskan memanggil fungsi (tool call), eksekusi, lalu kirim ulang hasilnya ke Groq.
+    """
+    api_key = os.environ.get("GROQ_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("GROQ_API_KEY environment variable is not set.")
+
+    try:
+        from groq import AsyncGroq
+    except ImportError:
+        raise ImportError(
+            "Package 'groq' belum terinstall. Jalankan 'pip install groq'."
+        )
+
+    from src.tools import convert_tools_to_openai_format, execute_tool
+
+    client = AsyncGroq(api_key=api_key)
+    openai_tools = convert_tools_to_openai_format(tools)
+
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+
+    if history:
+        for h in history[-10:]:
+            role = h.get("role", "user")
+            groq_role = "assistant" if role in ("model", "assistant") else "user"
+            text = h.get("text", "") or h.get("content", "")
+            if text and text.strip():
+                messages.append({"role": groq_role, "content": text.strip()})
+
+    messages.append({"role": "user", "content": user_message})
+
+    last_exception = None
+    for attempt in range(max_retries):
+        try:
+            # First call: determine if Groq wants to invoke tools
+            response = await client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=messages,
+                tools=openai_tools if openai_tools else None,
+                tool_choice="auto" if openai_tools else None,
+                temperature=0.7,
+                max_tokens=1024,
+            )
+
+            if not response.choices:
+                raise ValueError("Groq returned empty response choices.")
+
+            response_message = response.choices[0].message
+            total_tokens = 0
+
+            if hasattr(response, "usage") and response.usage:
+                usage = response.usage
+                if isinstance(usage, dict):
+                    total_tokens += usage.get("total_tokens", 0)
+                else:
+                    total_tokens += getattr(usage, "total_tokens", 0)
+
+            tool_calls = getattr(response_message, "tool_calls", None)
+
+            if not tool_calls:
+                content = response_message.content or ""
+                if chat_id and total_tokens > 0:
+                    try:
+                        from src.kv import save_groq_usage
+                        await save_groq_usage(chat_id, total_tokens)
+                    except Exception as kv_err:
+                        logger.warning("Failed to save Groq token usage: %s", str(kv_err))
+                return content.strip()
+
+            # Append assistant message with tool calls
+            assistant_msg_dict: dict[str, Any] = {
+                "role": "assistant",
+                "content": response_message.content or "",
+                "tool_calls": [],
+            }
+            for tc in tool_calls:
+                tc_id = getattr(tc, "id", None) or (tc.get("id") if isinstance(tc, dict) else "")
+                func_obj = getattr(tc, "function", None) or (tc.get("function") if isinstance(tc, dict) else None)
+                func_name = getattr(func_obj, "name", None) or (func_obj.get("name") if isinstance(func_obj, dict) else "")
+                func_args_str = getattr(func_obj, "arguments", None) or (func_obj.get("arguments") if isinstance(func_obj, dict) else "{}")
+
+                assistant_msg_dict["tool_calls"].append({
+                    "id": tc_id,
+                    "type": "function",
+                    "function": {
+                        "name": func_name,
+                        "arguments": func_args_str if isinstance(func_args_str, str) else json.dumps(func_args_str),
+                    },
+                })
+
+            messages.append(assistant_msg_dict)
+
+            # Execute tools and append results
+            for tc in tool_calls:
+                tc_id = getattr(tc, "id", None) or (tc.get("id") if isinstance(tc, dict) else "")
+                func_obj = getattr(tc, "function", None) or (tc.get("function") if isinstance(tc, dict) else None)
+                func_name = getattr(func_obj, "name", None) or (func_obj.get("name") if isinstance(func_obj, dict) else "")
+                func_args_str = getattr(func_obj, "arguments", None) or (func_obj.get("arguments") if isinstance(func_obj, dict) else "{}")
+
+                if isinstance(func_args_str, str):
+                    try:
+                        func_args = json.loads(func_args_str) if func_args_str else {}
+                    except Exception:
+                        func_args = {}
+                else:
+                    func_args = func_args_str or {}
+
+                try:
+                    tool_result = await execute_tool(func_name, func_args, chat_id=chat_id or 0)
+                except Exception as ex:
+                    logger.error("Error executing tool %s: %s", func_name, str(ex))
+                    tool_result = {"error": f"Error executing tool {func_name}: {str(ex)}"}
+
+                tool_content = json.dumps(tool_result, ensure_ascii=False) if not isinstance(tool_result, str) else tool_result
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "content": tool_content,
+                })
+
+            # Second call: generate final text response based on tool results
+            final_response = await client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=messages,
+                temperature=0.7,
+                max_tokens=1024,
+            )
+
+            if hasattr(final_response, "usage") and final_response.usage:
+                usage = final_response.usage
+                if isinstance(usage, dict):
+                    total_tokens += usage.get("total_tokens", 0)
+                else:
+                    total_tokens += getattr(usage, "total_tokens", 0)
+
+            if chat_id and total_tokens > 0:
+                try:
+                    from src.kv import save_groq_usage
+                    await save_groq_usage(chat_id, total_tokens)
+                except Exception as kv_err:
+                    logger.warning("Failed to save Groq token usage: %s", str(kv_err))
+
+            if final_response.choices and len(final_response.choices) > 0:
+                final_content = final_response.choices[0].message.content or ""
+                return final_content.strip()
+
+            return ""
+
+        except Exception as e:
+            last_exception = e
+            logger.warning(
+                "Groq Slow Path attempt %d/%d failed: %s",
+                attempt + 1,
+                max_retries,
+                str(e),
+            )
+            if attempt < max_retries - 1:
+                backoff = 2**attempt
+                await asyncio.sleep(backoff)
+
+    if last_exception:
+        raise last_exception
+    raise RuntimeError("Groq Slow Path API request failed after retries.")
+

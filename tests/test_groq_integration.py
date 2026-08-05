@@ -100,6 +100,7 @@ class TestGroqIntegration(unittest.IsolatedAsyncioTestCase):
 
         mock_gemini_resp = MagicMock()
         mock_gemini_resp.text = "Jawaban dari Gemini Fallback"
+        mock_gemini_resp.function_calls = None
         mock_gen_gemini.return_value = (mock_gemini_resp, "gemini-2.0-flash", 120)
 
         with patch.dict(os.environ, {"GROQ_API_KEY": "gsk_test123"}):
@@ -135,6 +136,7 @@ class TestGroqIntegration(unittest.IsolatedAsyncioTestCase):
 
         mock_gemini_resp = MagicMock()
         mock_gemini_resp.text = "Hari ini cuaca di Jakarta cerah 28°C"
+        mock_gemini_resp.function_calls = None
         mock_gen_gemini.return_value = (mock_gemini_resp, "gemini-2.0-flash", 200)
 
         with patch.dict(os.environ, {"GROQ_API_KEY": "gsk_test123"}):

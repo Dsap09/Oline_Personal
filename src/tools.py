@@ -1046,4 +1046,69 @@ TOOL_EXECUTORS = {
     "download_from_drive": execute_download_from_drive,
 }
 
+TOOL_HANDLERS = TOOL_EXECUTORS
+
+
+def convert_tools_to_openai_format(tool_declarations: list[dict]) -> list[dict]:
+    """
+    Mengonversi deklarasi tools (format Gemini / dict biasa) ke format OpenAI/Groq function calling.
+    """
+    if not tool_declarations:
+        return []
+
+    openai_tools = []
+    for decl in tool_declarations:
+        if "type" in decl and "function" in decl:
+            openai_tools.append(decl)
+        else:
+            openai_tools.append({
+                "type": "function",
+                "function": {
+                    "name": decl.get("name"),
+                    "description": decl.get("description", ""),
+                    "parameters": decl.get("parameters", {"type": "object", "properties": {}}),
+                },
+            })
+    return openai_tools
+
+
+async def execute_tool(
+    func_name: str, func_args: dict, chat_id: int = 0
+) -> dict[str, Any]:
+    """
+    Menjalankan fungsi tool berdasarkan nama dan mengembalikan hasilnya.
+    Mendukung penyuntikan parameter otomatis (seperti chat_id).
+    """
+    logger.info("Executing function call: %s with args: %s", func_name, func_args)
+
+    executor = TOOL_EXECUTORS.get(func_name)
+    if not executor:
+        return {"error": f"Unknown function: {func_name}"}
+
+    args = dict(func_args) if func_args else {}
+
+    if func_name in ("save_journal_entry", "get_journal_recap"):
+        args["chat_id"] = chat_id
+        if func_name == "save_journal_entry":
+            return await executor(
+                chat_id=chat_id,
+                text=args.get("text", ""),
+                date=args.get("date"),
+            )
+        else:
+            return await executor(
+                chat_id=chat_id,
+                start_date=args.get("start_date"),
+                end_date=args.get("end_date"),
+            )
+    elif func_name == "check_quota":
+        return await executor(chat_id=chat_id)
+    elif func_name == "send_voice_message":
+        return await executor(chat_id=chat_id, text=args.get("text", ""))
+    elif func_name in ("upload_to_drive", "download_from_drive"):
+        return await executor(chat_id=chat_id, **args)
+    else:
+        return await executor(**args)
+
+
 

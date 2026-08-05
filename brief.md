@@ -1,228 +1,199 @@
 
-## Brief Fitur: Google Drive Pribadi Oline (Kelola Folder, Dokumen & Foto)
+## Brief Fitur: Fallback Cerdas Groq untuk Semua Fungsi (Slow Path)
 
 ### 🎯 Tujuan
-Oline bisa mengelola folder khusus di Google Drive pemilik bot, seolah-olah itu adalah "database file pribadi". Kemampuan yang diinginkan:
-1. **Membuat folder** di dalam folder khusus yang sudah diizinkan.
-2. **Menyimpan file** (dokumen PDF/Word/foto) yang dikirim pengguna ke folder yang ditentukan.
-3. **Melihat daftar isi** folder tertentu.
-4. **Mencari file** berdasarkan nama di seluruh folder khusus.
-5. **Mengirim kembali file/foto** dari Drive ke pengguna melalui Telegram.
-6. **Menghapus file** (opsional, bisa ditambahkan nanti).
+1. Memastikan **semua fitur Oline tetap berjalan** meskipun API Gemini sedang error (kuota habis, timeout, 404, dll.).
+2. Memanfaatkan **kuota Groq yang besar** (14.400 req/hari) sebagai pengganti otomatis untuk menjalankan *tools*.
+3. Menghilangkan pengalaman "bot error" saat Gemini down, diganti dengan respons yang tetap informatif (meskipun mungkin sedikit kurang akurat).
 
-Semua interaksi dilakukan dengan bahasa alami, seperti:
-- "Olin, buat folder Skripsi di database."
-- "Simpan file ini ke folder Skripsi."
-- "Tampilkan isi folder Skripsi."
-- "Kirim foto sunset yang di Bali itu dong."
+### 🏗️ Arsitektur Baru (Slow Path dengan Fallback)
+```
+Permintaan pengguna (butuh tools)
+        │
+        ▼
+Coba Gemini + tools
+        │
+        ├── Berhasil ──▶ Respons Gemini
+        │
+        └── Gagal (exception / timeout)
+                │
+                ▼
+        Coba Groq + tools (fallback)
+                │
+                ├── Berhasil ──▶ Respons Groq (dengan catatan opsional)
+                │
+                └── Gagal ──▶ Pesan lucu Oline (error handling akhir)
+```
 
-### 🏗️ Arsitektur
-| Komponen | Teknologi |
-|----------|-----------|
-| Bot Telegram | Python, Vercel (existing) |
-| Google Drive API | `google-api-python-client` |
-| Autentikasi | Google Service Account (gratis) |
-| Intent Detection | Gemini function calling (slow path) |
-
-**Keamanan:** Service account hanya diberi izin akses ke **satu folder khusus** (misal: "Database Oline") di Google Drive pemilik bot. Folder di luar itu tidak bisa diakses.
+**Catatan:**  
+- Fallback Groq hanya akan dijalankan untuk permintaan **Slow Path** (yang membutuhkan tools). Fast Path sudah menggunakan Groq secara default, jadi tidak terpengaruh.
+- Jika Groq juga gagal (jarang terjadi), Oline akan memberikan pesan ramah, bukan error mentah.
 
 ### 🛠️ Langkah Implementasi
 
-#### 1. Setup Google Cloud & Service Account
-**Dilakukan oleh pemilik bot (Kak Aga), dibantu Antigravity untuk instruksi:**
-1. Buka [Google Cloud Console](https://console.cloud.google.com).
-2. Buat project baru (atau pakai existing).
-3. Aktifkan **Google Drive API**.
-4. Buat **Service Account**: IAM & Admin → Service Accounts → Create.
-5. Simpan file JSON kredensial yang diunduh.
-6. Di Google Drive, buat folder (misal: "Database Oline").
-7. Klik kanan folder → **Bagikan** → masukkan email service account (ada di file JSON) dengan izin **Editor** atau **Content Manager**.
-8. Salin **Folder ID** dari URL Drive: `https://drive.google.com/drive/folders/<FOLDER_ID>`.
+#### 1. Tingkatkan Kemampuan `src/groq.py` – Dukungan Function Calling
+Saat ini `chat_groq` hanya menerima pesan teks biasa. Kita perlu fungsi baru yang bisa menerima **tools** dan mengeksekusi *function calling*.
 
-#### 2. Simpan Environment Variables di Vercel
-- `GOOGLE_DRIVE_CREDENTIALS` — isi dengan **seluruh teks JSON** dari file kredensial service account (bisa di-minify jadi satu baris).
-- `GOOGLE_DRIVE_FOLDER_ID` — ID folder "Database Oline".
-
-#### 3. Tambahkan Dependensi
-Di `requirements.txt`:
-```
-google-api-python-client
-google-auth
-```
-
-#### 4. Buat File Baru `src/drive.py`
-Berisi semua fungsi untuk berinteraksi dengan Google Drive.
-
-**a. Inisialisasi Service:**
+**Buat fungsi `chat_groq_with_tools`:**
 ```python
 import json
-import os
-import io
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
+from groq import Groq
 
-SCOPES = ['https://www.googleapis.com/auth/drive.file']
-FOLDER_ID = os.getenv('GOOGLE_DRIVE_FOLDER_ID')
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+GROQ_MODEL = "llama-3.1-8b-instant"
 
-def get_drive_service():
-    creds_dict = json.loads(os.getenv('GOOGLE_DRIVE_CREDENTIALS'))
-    creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-    return build('drive', 'v3', credentials=creds)
-```
+# Import handler tools (dari tools.py)
+from src.tools import TOOL_HANDLERS
 
-**b. Cari Folder Berdasarkan Nama:**
-```python
-def find_folder(service, folder_name, parent_id=None):
-    query = f"mimeType='application/vnd.google-apps.folder' and name='{folder_name}' and trashed=false"
-    if parent_id:
-        query += f" and '{parent_id}' in parents"
-    results = service.files().list(q=query, fields="files(id, name)").execute()
-    folders = results.get('files', [])
-    return folders[0]['id'] if folders else None
-```
-
-**c. Buat Folder Baru:**
-```python
-def create_folder(service, folder_name, parent_id=FOLDER_ID):
-    existing = find_folder(service, folder_name, parent_id)
-    if existing:
-        return existing, False  # Sudah ada
-    file_metadata = {
-        'name': folder_name,
-        'mimeType': 'application/vnd.google-apps.folder',
-        'parents': [parent_id]
-    }
-    folder = service.files().create(body=file_metadata, fields='id').execute()
-    return folder['id'], True
-```
-
-**d. Upload File:**
-```python
-def upload_file(service, file_name, file_data, mime_type, folder_name=None):
-    parent_id = FOLDER_ID
-    if folder_name:
-        found = find_folder(service, folder_name, FOLDER_ID)
-        if not found:
-            # Folder tidak ada → buat dulu
-            found, _ = create_folder(service, folder_name)
-        parent_id = found
-
-    media = MediaIoBaseUpload(io.BytesIO(file_data), mimetype=mime_type, resumable=False)
-    file_metadata = {
-        'name': file_name,
-        'parents': [parent_id]
-    }
-    uploaded = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-    return uploaded['id']
-```
-
-**e. List File dalam Folder:**
-```python
-def list_files(service, folder_name=None):
-    parent_id = FOLDER_ID
-    if folder_name:
-        found = find_folder(service, folder_name, FOLDER_ID)
-        if not found:
-            return []
-        parent_id = found
+async def chat_groq_with_tools(system_prompt: str, history: list, user_message: str, tools: list) -> str:
+    """
+    Panggil Groq dengan function calling.
+    Jika Groq memutuskan memanggil fungsi, eksekusi, lalu kirim ulang hasilnya ke Groq.
+    """
+    messages = [{"role": "system", "content": system_prompt}]
+    for h in history[-10:]:
+        messages.append(h)
+    messages.append({"role": "user", "content": user_message})
     
-    query = f"'{parent_id}' in parents and trashed=false"
-    results = service.files().list(q=query, fields="files(id, name, mimeType, size)").execute()
-    return results.get('files', [])
+    # Panggil pertama: Groq menentukan apakah perlu tool
+    response = client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=messages,
+        tools=tools,  # Tools dalam format OpenAI
+        tool_choice="auto",
+        temperature=0.9,
+        max_tokens=1024
+    )
+    
+    response_message = response.choices[0].message
+    
+    # Cek apakah Groq ingin memanggil fungsi
+    tool_calls = response_message.tool_calls
+    if not tool_calls:
+        # Tidak ada tool call, langsung kembalikan teks
+        return response_message.content or ""
+    
+    # Ada tool call → eksekusi
+    messages.append(response_message)  # simpan respons Groq yang berisi tool call
+    
+    for tool_call in tool_calls:
+        function_name = tool_call.function.name
+        function_args = json.loads(tool_call.function.arguments)
+        
+        # Panggil handler yang sesuai (dari TOOL_HANDLERS)
+        if function_name in TOOL_HANDLERS:
+            try:
+                function_result = await TOOL_HANDLERS[function_name](**function_args)
+            except Exception as e:
+                function_result = f"Error saat menjalankan fungsi: {e}"
+        else:
+            function_result = f"Fungsi {function_name} tidak dikenal."
+        
+        # Tambahkan hasil tool ke pesan
+        messages.append({
+            "role": "tool",
+            "tool_call_id": tool_call.id,
+            "content": str(function_result)
+        })
+    
+    # Panggil kedua: Groq merangkai respons akhir berdasarkan hasil tool
+    final_response = client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=messages,
+        temperature=0.9,
+        max_tokens=1024
+    )
+    
+    return final_response.choices[0].message.content or ""
 ```
 
-**f. Cari File Berdasarkan Nama:**
+**Penting:** Format tools yang dikirim harus kompatibel dengan OpenAI. Gemini tools yang sudah ada mungkin perlu dikonversi (biasanya sudah mirip). Antigravity bisa menyesuaikan jika diperlukan.
+
+#### 2. Pastikan `TOOL_HANDLERS` Tersedia
+Di `src/tools.py`, pastikan ada dictionary yang memetakan nama fungsi ke handler-nya, contoh:
 ```python
-def search_files(service, file_name):
-    query = f"name contains '{file_name}' and '{FOLDER_ID}' in parents and trashed=false"
-    results = service.files().list(q=query, fields="files(id, name, mimeType)").execute()
-    return results.get('files', [])
+TOOL_HANDLERS = {
+    "get_stock_price": get_stock_price,
+    "get_market_summary": get_market_summary,
+    "search_internet": search_internet,
+    "get_weather": get_weather,
+    # ... dan seterusnya
+}
 ```
+Jika belum ada, buat dictionary ini.
 
-**g. Download File:**
-```python
-def download_file(service, file_id):
-    request = service.files().get_media(fileId=file_id)
-    buffer = io.BytesIO()
-    downloader = MediaIoBaseDownload(buffer, request)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-    buffer.seek(0)
-    return buffer
-```
-
-#### 5. Definisikan Tools Gemini
-Tambahkan tools berikut:
-
-**a. `create_drive_folder`** — Buat folder baru di Database Oline.
-**b. `upload_to_drive`** — Simpan file yang baru diterima ke folder tertentu.
-**c. `list_drive_files`** — Lihat isi folder.
-**d. `search_drive_files`** — Cari file berdasarkan nama.
-**e. `download_from_drive`** — Kirim file dari Drive ke Telegram.
-
-#### 6. Handler untuk File yang Diterima
-Di `handlers.py`, tangkap pesan dengan dokumen/foto:
-```python
-if update.message.document:
-    file = await context.bot.get_file(update.message.document.file_id)
-    file_data = await file.download_as_bytearray()
-    # Simpan sementara di memori, tunggu konfirmasi user (misal "simpan ke folder skripsi")
-    # Lalu panggil upload_to_drive handler
-```
-
-#### 7. Integrasikan ke Intent Detection
-Tambahkan keyword:
-```python
-"drive": ["drive", "database", "folder", "simpan file", "buat folder", "cari file", "tampilkan isi", "kirim file"]
-```
-Masukkan tools drive ke `TOOLS_BY_INTENT["drive"]`.
-
-#### 8. Kirim Foto sebagai Gambar (Bukan Dokumen)
-Saat mendownload foto dari Drive, jika mime type adalah `image/jpeg` atau `image/png`, gunakan `context.bot.send_photo()` agar pengguna bisa melihat preview langsung.
+#### 3. Modifikasi `handlers.py` – Fallback di Slow Path
+Di bagian handler yang menangani Slow Path, bungkus pemanggilan Gemini dengan `try-except`. Jika gagal, panggil `chat_groq_with_tools`.
 
 ```python
-if 'image' in mime_type:
-    await context.bot.send_photo(chat_id=update.effective_chat.id, photo=buffer)
-else:
-    await context.bot.send_document(chat_id=update.effective_chat.id, document=buffer)
+from src.gemini import chat_with_oline  # Gemini
+from src.groq import chat_groq_with_tools  # Groq fallback
+
+# Di dalam fungsi handler setelah intent terdeteksi:
+if intent is not None:
+    tools = TOOLS_BY_INTENT.get(intent, [])
+    try:
+        # Coba Gemini dulu
+        response = await chat_with_oline(
+            system_prompt=SYSTEM_PROMPT,
+            history=history,
+            user_message=user_text,
+            tools=tools
+        )
+    except Exception as e:
+        log.warning(f"Gemini gagal, mencoba fallback ke Groq. Error: {e}")
+        try:
+            # Fallback ke Groq dengan tools yang sama
+            response = await chat_groq_with_tools(
+                system_prompt=SYSTEM_PROMPT,
+                history=history,
+                user_message=user_text,
+                tools=tools
+            )
+            # Tambahkan catatan kecil di respons agar user tahu (opsional)
+            response += "\n\n(⚠️ Oline pakai otak cadangan nih, Gemini lagi istirahat~)"
+        except Exception as e2:
+            log.error(f"Groq fallback juga gagal: {e2}")
+            response = "Aduh, Oline lagi error dua-duanya nih. Coba lagi nanti ya, bestie~ 😢"
 ```
 
-#### 9. Chat Action
-Kirim `sendChatAction` dengan `action="typing"` atau `"upload_document"` saat memproses Drive.
+#### 4. Konversi Tools Gemini ke Format OpenAI (Jika Diperlukan)
+Gemini menggunakan format tools yang berbeda (biasanya dictionary dengan key `function_declarations`). Groq (OpenAI format) membutuhkan format berbeda. Antigravity bisa membuat fungsi kecil untuk mengonversi, atau menyimpan tools dalam format yang kompatibel dengan keduanya.  
+Contoh sederhana: pastikan tools yang dikirim ke `chat_groq_with_tools` sudah dalam format:
+```python
+{
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "...",
+        "parameters": { ... }
+    }
+}
+```
+
+#### 5. Penanganan Timeout
+- Timeout Gemini sudah ada (8 detik). Jika timeout, exception akan dilempar dan langsung ditangkap untuk fallback ke Groq.
+- Timeout Groq bisa diatur lebih longgar (10 detik) untuk memberi kesempatan function calling selesai.
 
 ### 📁 File yang Perlu Diubah/Dibuat
 | File | Aksi |
 |------|------|
-| `requirements.txt` | Tambahkan `google-api-python-client`, `google-auth` |
-| `src/drive.py` | **Baru** — semua fungsi Drive |
-| `src/tools.py` | Tambahkan definisi & handler tools Drive |
-| `src/handlers.py` | Tambahkan intent "drive", tangkap dokumen/foto |
-| Environment Vercel | Tambahkan `GOOGLE_DRIVE_CREDENTIALS`, `GOOGLE_DRIVE_FOLDER_ID` |
+| `src/groq.py` | Tambah fungsi `chat_groq_with_tools` |
+| `src/tools.py` | Pastikan ada `TOOL_HANDLERS` mapping |
+| `src/handlers.py` | Modifikasi slow path: try Gemini, except Groq fallback |
+| `src/gemini.py` | Pastikan `chat_with_oline` bisa melempar exception yang jelas |
 
-### 🧪 Contoh Percakapan
+### 🧪 Contoh Percakapan (Saat Gemini Kuota Habis)
 ```
-User: Olin, buat folder Skripsi.
-Oline: Sip! Folder Skripsi udah dibuat di Database Oline. 📂
-
-User: (upload Draft_Bab1.pdf)
-User: Simpan file ini ke folder Skripsi.
-Oline: Beres! Draft_Bab1.pdf udah masuk ke folder Skripsi.
-
-User: Tampilkan isi folder Skripsi.
-Oline: Isi folder Skripsi: Draft_Bab1.pdf. Mau dikirim?
-
-User: Kirim file Draft_Bab1.pdf yang di folder Skripsi.
-Oline: (mengirim file)
-
-User: (kirim foto Kucing.jpg)
-User: Simpan ke folder Foto Hewan.
-Oline: Kucing.jpg udah aman di folder Foto Hewan. Lucu banget sih~ 🐱
+User: Cuaca di Tuban gimana?
+(Proses: Gemini gagal karena kuota habis)
+(Fallback: Groq dipanggil dengan tools cuaca)
+(Groq berhasil ambil data dari OpenWeather, lalu merangkai respons)
+Oline: "Otak utama lagi capek, tapi aku cek pakai cadangan ya~ Cuaca di Tuban sekarang berawan, 26°C. Jangan lupa bawa payung! ☁️"
 ```
 
 ### ⚠️ Catatan Penting
-- **Timeout Vercel**: Operasi Drive biasanya < 3 detik untuk file < 10 MB. Untuk file besar (15–20 MB), bisa mendekati 8–10 detik. Pantau log.
-- **Kuota API**: Google Drive API gratis untuk operasi wajar. Upload/download file kecil tidak akan kena limit.
-- **Keamanan**: Service account hanya bisa mengakses folder dengan ID `GOOGLE_DRIVE_FOLDER_ID`. Pastikan tidak ada file sensitif di folder tersebut.
-- **Folder Duplikat**: Handler `create_folder` sudah mengecek apakah folder dengan nama sama sudah ada sebelum membuat.
+- **Akurasi Groq**: Model `llama-3.1-8b-instant` mungkin kurang akurat dalam memilih tools atau mengekstrak argumen dibanding Gemini. Namun untuk fallback, ini sudah cukup. Jika hasilnya kurang tepat, user bisa mencoba lagi nanti.
+- **Kuota Groq**: Tetap gratis 14.400 req/hari. Pemakaian function calling akan sedikit lebih boros karena dua panggilan (pertama untuk tool choice, kedua untuk final). Tapi masih sangat aman untuk penggunaan pribadi.
+- **Konsistensi Persona**: System prompt yang sama dipakai untuk Groq dan Gemini, sehingga Oline tetap berkepribadian sama.
+- **Logging**: Pastikan setiap fallback tercatat di log Vercel untuk pemantauan.

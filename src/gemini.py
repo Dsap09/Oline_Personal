@@ -115,35 +115,9 @@ async def _execute_function_call(
     """
     Execute sebuah function call dari Gemini dan return hasilnya.
     """
-    logger.info("Executing function call: %s with args: %s", func_name, func_args)
+    from src.tools import execute_tool
 
-    executor = TOOL_EXECUTORS.get(func_name)
-    if not executor:
-        return {"error": f"Unknown function: {func_name}"}
-
-    if func_name in ("save_journal_entry", "get_journal_recap"):
-        func_args["chat_id"] = chat_id
-        if func_name == "save_journal_entry":
-            return await executor(
-                chat_id=chat_id,
-                text=func_args.get("text", ""),
-                date=func_args.get("date"),
-            )
-        else:
-            return await executor(
-                chat_id=chat_id,
-                start_date=func_args.get("start_date"),
-                end_date=func_args.get("end_date"),
-            )
-    elif func_name == "check_quota":
-        return await executor(chat_id=chat_id)
-    elif func_name == "send_voice_message":
-        return await executor(chat_id=chat_id, text=func_args.get("text", ""))
-    elif func_name in ("upload_to_drive", "download_from_drive"):
-        return await executor(chat_id=chat_id, **func_args)
-    else:
-        return await executor(**func_args)
-
+    return await execute_tool(func_name, func_args, chat_id=chat_id)
 
 
 async def _update_memory(
@@ -300,7 +274,6 @@ async def chat_with_oline(
                     system_prompt, history, user_message, chat_id=chat_id
                 )
 
-
                 if groq_response:
                     # Update riwayat percakapan
                     history.append({"role": "user", "text": user_message})
@@ -313,7 +286,6 @@ async def chat_with_oline(
                 )
 
         # 3. Buat tools yang terfilter sesuai intent (Fast Path Gemini fallback: tools = None)
-
         tool_declarations = get_tools_for_intent(intent)
         tools = _build_tools(tool_declarations)
 
@@ -324,71 +296,101 @@ async def chat_with_oline(
             "parts": [{"text": user_message}],
         })
 
-        # 5. Generate response (dengan timeout 8 detik & automatic fallback)
-        response, used_model, tokens_used = await _generate_content_with_fallback(
-            system_prompt, tools, contents, timeout_seconds=8.0
-        )
-        total_tokens_session = tokens_used
-
-        # 6. Handle function calling loop jika ada
-        max_iterations = 3
-        iteration = 0
-
-        while iteration < max_iterations:
-            iteration += 1
-
-            if not hasattr(response, "function_calls") or not response.function_calls:
-                break
-
-            if response.candidates and len(response.candidates) > 0:
-                contents.append(response.candidates[0].content)
-
-            function_responses = []
-            for fc in response.function_calls:
-                func_name = fc.name
-                func_args = dict(fc.args) if fc.args else {}
-                result = await _execute_function_call(func_name, func_args, chat_id)
-                function_responses.append(
-                    types.Part.from_function_response(
-                        name=func_name,
-                        response=result,
-                    )
-                )
-
-            contents.append(
-                types.Content(
-                    role="user",
-                    parts=function_responses,
-                )
-            )
-
-            # Generate lagi dengan function results
+        try:
+            # 5. Generate response (dengan timeout 8 detik & automatic fallback)
             response, used_model, tokens_used = await _generate_content_with_fallback(
                 system_prompt, tools, contents, timeout_seconds=8.0
             )
-            total_tokens_session += tokens_used
+            total_tokens_session = tokens_used
 
-        # 7. Extract final text response
-        bot_response = ""
-        if hasattr(response, "text") and response.text:
-            bot_response = response.text
-        elif response.candidates:
-            for part in response.candidates[0].content.parts:
-                if hasattr(part, "text") and part.text:
-                    bot_response += part.text
+            # 6. Handle function calling loop jika ada
+            max_iterations = 3
+            iteration = 0
 
-        if not bot_response:
-            bot_response = "hmm, aku lagi agak bingung nih. coba lagi nanti ya 😅"
+            while iteration < max_iterations:
+                iteration += 1
+
+                if not hasattr(response, "function_calls") or not response.function_calls:
+                    break
+
+                if response.candidates and len(response.candidates) > 0:
+                    contents.append(response.candidates[0].content)
+
+                function_responses = []
+                for fc in response.function_calls:
+                    func_name = fc.name
+                    func_args = dict(fc.args) if fc.args else {}
+                    result = await _execute_function_call(func_name, func_args, chat_id)
+                    function_responses.append(
+                        types.Part.from_function_response(
+                            name=func_name,
+                            response=result,
+                        )
+                    )
+
+                contents.append(
+                    types.Content(
+                        role="user",
+                        parts=function_responses,
+                    )
+                )
+
+                # Generate lagi dengan function results
+                response, used_model, tokens_used = await _generate_content_with_fallback(
+                    system_prompt, tools, contents, timeout_seconds=8.0
+                )
+                total_tokens_session += tokens_used
+
+            # 7. Extract final text response
+            bot_response = ""
+            if hasattr(response, "text") and response.text:
+                bot_response = response.text
+            elif response.candidates:
+                for part in response.candidates[0].content.parts:
+                    if hasattr(part, "text") and part.text:
+                        bot_response += part.text
+
+            if not bot_response:
+                bot_response = "hmm, aku lagi agak bingung nih. coba lagi nanti ya 😅"
+
+            # 9. Simpan pemakaian token ke KV
+            if total_tokens_session > 0:
+                await save_usage(chat_id, total_tokens_session)
+
+        except Exception as gemini_err:
+            if intent is not None and os.environ.get("GROQ_API_KEY", "").strip():
+                logger.warning(
+                    "Gemini Slow Path gagal (%s). Mencoba fallback ke Groq Slow Path...",
+                    str(gemini_err),
+                )
+                try:
+                    from src.groq import chat_groq_with_tools
+
+                    groq_response = await chat_groq_with_tools(
+                        system_prompt=system_prompt,
+                        history=history,
+                        user_message=user_message,
+                        tools=tool_declarations,
+                        chat_id=chat_id,
+                    )
+                    if groq_response:
+                        bot_response = (
+                            groq_response
+                            + "\n\n(⚠️ Oline pakai otak cadangan nih, Gemini lagi istirahat~)"
+                        )
+                    else:
+                        raise ValueError("Groq returned empty response")
+                except Exception as groq_err:
+                    logger.error("Groq Slow Path fallback juga gagal: %s", str(groq_err))
+                    return "aduh, Oline lagi error dua-duanya nih. Coba lagi nanti ya, bestie~ 😢"
+            else:
+                raise gemini_err
 
         # 8. Update riwayat percakapan
         if "masalah teknis" not in bot_response and "error nih" not in bot_response:
             history.append({"role": "user", "text": user_message})
             history.append({"role": "model", "text": bot_response})
             await save_history(chat_id, history)
-
-        # 9. Simpan pemakaian token ke KV
-        if total_tokens_session > 0:
-            await save_usage(chat_id, total_tokens_session)
 
         return bot_response
 
@@ -403,3 +405,4 @@ async def chat_with_oline(
         ):
             return "aduh, trafik server AI lagi penuh banget nih 😅 coba kirim pesan lagi sebentar ya!"
         return "aduh maaf, aku lagi agak ngelag nih 😅 coba lagi nanti ya!"
+
