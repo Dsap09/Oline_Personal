@@ -6,7 +6,7 @@ Oline adalah bot Telegram asisten pribadi berpersona Gen-Z yang cerdas, cepat, d
 
 ## ✨ Fitur Utama
 
-- **⚡ Fast Path (Groq API)** — Respon kilat untuk obrolan santai, sapaan, dan pertanyaan ringan menggunakan model `llama-3.1-8b-instant`.
+- **⚡ Fast Path (Groq API)** — Respon kilat untuk obrolan santai, sapaan, dan pertanyaan ringan menggunakan model `openai/gpt-oss-20b`.
 - **🛠️ Slow Path (Google Gemini API)** — Pemrosesan kecerdasan utama dengan rotasi model otomatis (`gemini-flash-lite-latest`, `gemini-2.5-flash`, `gemini-2.0-flash`) dan Function Calling untuk tugas kompleks.
 - **🛡️ Groq Slow Path Fallback** — Jika Gemini down (kuota habis/429/timeout), Oline otomatis fallback ke Groq dengan dukungan *Function Calling* (2-stage OpenAI tool execution) agar fitur bot tidak pernah mati.
 - **🎬 Rekomendasi Film** — Pencarian rekomendasi film berdasarkan genre, mood, atau kata kunci (via TMDb API).
@@ -30,7 +30,7 @@ Oline adalah bot Telegram asisten pribadi berpersona Gen-Z yang cerdas, cepat, d
 | **Hosting** | Vercel (Serverless Functions) |
 | **Database / KV** | Vercel KV / Upstash Redis (REST API Pipeline) |
 | **AI Primary Engine** | Google Gemini API (`google-genai` SDK) |
-| **AI Fast Engine & Fallback** | Groq API (`llama-3.1-8b-instant`) |
+| **AI Fast Engine & Fallback** | Groq API (`openai/gpt-oss-20b`) |
 | **TTS Voice Engine** | ElevenLabs API |
 | **Cloud Storage** | Google Drive API (OAuth 2.0) |
 | **Integrasi API** | TMDb, OpenWeatherMap, iTunes, yfinance, DuckDuckGo (`ddgs`) |

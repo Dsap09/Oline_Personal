@@ -24,6 +24,8 @@ USAGE_PREFIX = "gemini_usage"
 GROQ_USAGE_PREFIX = "groq_usage"
 TTS_PREFIX = "tts_usage"
 PENDING_FILE_PREFIX = "pending_file"
+LOCATION_PREFIX = "location"
+
 
 
 
@@ -398,5 +400,37 @@ async def clear_pending_file(chat_id: int) -> bool:
     key = f"{PENDING_FILE_PREFIX}:{chat_id}"
     result = await _kv_request(["DEL", key])
     return result is not None
+
+
+# --- Location Storage Functions ---
+
+async def save_user_location(chat_id: int, lat: float, lon: float) -> bool:
+    """
+    Menyimpan lokasi (koordinat lat/lon) pengguna ke Vercel KV.
+    Key format: location:<chat_id>
+    TTL 30 hari (2592000 detik).
+    """
+    key = f"{LOCATION_PREFIX}:{chat_id}"
+    payload = json.dumps({"lat": lat, "lon": lon})
+    result = await _kv_request(["SET", key, payload, "EX", "2592000"])
+    return result is not None
+
+
+async def get_user_location(chat_id: int) -> Optional[dict[str, float]]:
+    """
+    Mengambil lokasi tersimpan pengguna dari Vercel KV.
+    Returns dict {"lat": lat, "lon": lon} atau None jika belum tersimpan.
+    """
+    key = f"{LOCATION_PREFIX}:{chat_id}"
+    result = await _kv_request(["GET", key])
+    if result and result.get("result"):
+        try:
+            data = json.loads(result["result"])
+            if isinstance(data, dict) and "lat" in data and "lon" in data:
+                return {"lat": float(data["lat"]), "lon": float(data["lon"])}
+        except Exception as e:
+            logger.warning("Error reading user location from KV: %s", str(e))
+    return None
+
 
 

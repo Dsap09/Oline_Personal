@@ -6,20 +6,25 @@ cuaca (OpenWeatherMap), dan jurnal harian (Vercel KV).
 
 import asyncio
 import logging
+import math
 import os
 from datetime import datetime
 from typing import Any, Optional
 
 import httpx
+import requests
 
 from src.kv import (
     get_journal_entries,
     get_monthly_tts_usage,
     get_today_groq_usage,
     get_today_usage,
+    get_user_location,
     save_journal,
     save_tts_usage,
+    save_user_location,
 )
+
 
 from src.utils import format_date_indonesian, parse_relative_date
 from src.voice import (
@@ -311,6 +316,48 @@ TOOL_DECLARATIONS = [
             "required": ["file_name"],
         },
     },
+    {
+        "name": "get_nearby_places",
+        "description": (
+            "Mencari tempat terdekat dari lokasi pengguna yang tersimpan, "
+            "berdasarkan kategori (misal: cafe, toko buku, restoran, mall)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "description": "Kategori tempat, misal 'cafe', 'restaurant', 'bookstore', 'mall', 'toko buku'.",
+                },
+                "radius_km": {
+                    "type": "number",
+                    "description": "Radius pencarian dalam kilometer. Default 2.0.",
+                },
+            },
+            "required": ["category"],
+        },
+    },
+    {
+        "name": "search_places_by_city",
+        "description": (
+            "Mencari tempat berdasarkan nama kota/area dan kategori. "
+            "Menggunakan geocoding untuk mendapatkan koordinat kota."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "Nama kota atau area (misal: 'Surabaya', 'Bandung', 'Jakarta Selatan').",
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Kategori tempat, misal 'toko buku', 'cafe', 'restoran', 'mall'.",
+                },
+            },
+            "required": ["city", "category"],
+        },
+    },
 ]
 
 TOOLS_BY_INTENT = {
@@ -328,6 +375,7 @@ TOOLS_BY_INTENT = {
         "upload_to_drive",
         "download_from_drive",
     ],
+    "lokasi": ["get_nearby_places", "search_places_by_city"],
 }
 
 
@@ -1027,6 +1075,169 @@ async def execute_download_from_drive(
         return {"error": f"Gagal mengambil file dari Google Drive: {str(e)}"}
 
 
+# ============================================================
+# Location & OpenStreetMap Helper Functions
+# ============================================================
+
+
+def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Menghitung jarak garis lurus (Haversine formula) dalam km antar 2 titik koordinat."""
+    R = 6371.0  # km
+    d_lat = math.radians(lat2 - lat1)
+    d_lon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(d_lat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(d_lon / 2) ** 2
+    )
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+
+def overpass_query(lat: float, lon: float, category: str, radius_m: int = 2000) -> list[dict]:
+    """Melakukan query ke Overpass API (OpenStreetMap) untuk mencari node POI."""
+    tag_map = {
+        "cafe": "amenity=cafe",
+        "kafe": "amenity=cafe",
+        "restaurant": "amenity=restaurant",
+        "restoran": "amenity=restaurant",
+        "toko buku": "shop=books",
+        "bookstore": "shop=books",
+        "mall": "shop=mall",
+        "bar": "amenity=bar",
+        "minimarket": "shop=convenience",
+        "supermarket": "shop=supermarket",
+        "spbu": "amenity=fuel",
+        "pom bensin": "amenity=fuel",
+        "apotek": "amenity=pharmacy",
+        "rumah sakit": "amenity=hospital",
+        "bank": "amenity=bank",
+        "atm": "amenity=atm",
+    }
+    cat_lower = category.lower().strip()
+    tag = tag_map.get(cat_lower, f"amenity={cat_lower}")
+
+    query = f"""
+    [out:json][timeout:10];
+    node[{tag}](around:{radius_m},{lat},{lon});
+    out body 10;
+    """
+    try:
+        response = requests.post(
+            "https://overpass-api.de/api/interpreter",
+            data={"data": query},
+            headers={"User-Agent": "OlineBot/1.0"},
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data.get("elements", [])
+    except Exception as e:
+        logger.error("Overpass API query error: %s", str(e))
+        return []
+
+
+async def get_nearby_places(
+    chat_id: int = 0, category: str = "", radius_km: float = 2.0
+) -> dict[str, Any]:
+    """Mencari tempat terdekat dari lokasi pengguna yang tersimpan."""
+    if not category:
+        return {"error": "Kategori tempat harus diisi (misal: 'cafe', 'toko buku', 'restoran')."}
+
+    loc = await get_user_location(chat_id)
+    if not loc:
+        return {
+            "error": "Lokasi belum disimpan",
+            "message": (
+                "Oline belum tahu lokasi kamu nih! "
+                "Coba kirim titik lokasi kamu via Telegram dulu ya (tombol jepit kertas > Lokasi) 📍"
+            ),
+        }
+
+    lat, lon = loc["lat"], loc["lon"]
+    radius_m = int(radius_km * 1000)
+
+    elements = await asyncio.to_thread(overpass_query, lat, lon, category, radius_m)
+    if not elements:
+        return {
+            "message": f"Tidak ditemukan {category} dalam radius {radius_km} km dari lokasi kamu."
+        }
+
+    results = []
+    for p in elements:
+        plat = p.get("lat", lat)
+        plon = p.get("lon", lon)
+        dist = haversine(lat, lon, plat, plon)
+        tags = p.get("tags", {})
+        name = tags.get("name") or tags.get("brand") or "Tanpa Nama"
+        street = tags.get("addr:street", "")
+        city_tag = tags.get("addr:city", "")
+        address = ", ".join(filter(None, [street, city_tag])) or "Alamat tidak spesifik"
+        results.append({
+            "name": name,
+            "distance_km": round(dist, 2),
+            "address": address,
+            "lat": plat,
+            "lon": plon,
+        })
+
+    results.sort(key=lambda x: x["distance_km"])
+    return {
+        "category": category,
+        "total_found": len(results),
+        "places": results[:5],
+    }
+
+
+async def search_places_by_city(city: str, category: str) -> dict[str, Any]:
+    """Mencari tempat berdasarkan nama kota/area dan kategori via Nominatim & Overpass API."""
+    def _geocode_and_search():
+        try:
+            geo_resp = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": city, "format": "json", "limit": 1},
+                headers={"User-Agent": "OlineBot/1.0"},
+                timeout=10.0,
+            )
+            geo_resp.raise_for_status()
+            geo_data = geo_resp.json()
+            if not geo_data:
+                return {"error": f"Kota/area '{city}' tidak ditemukan."}
+
+            lat = float(geo_data[0]["lat"])
+            lon = float(geo_data[0]["lon"])
+            display_name = geo_data[0].get("display_name", city)
+
+            elements = overpass_query(lat, lon, category, radius_m=5000)
+            if not elements:
+                return {"message": f"Tidak ditemukan {category} di area {city}."}
+
+            results = []
+            for p in elements[:5]:
+                tags = p.get("tags", {})
+                name = tags.get("name") or tags.get("brand") or "Tanpa Nama"
+                street = tags.get("addr:street", "")
+                address = street if street else "Alamat tidak spesifik"
+                results.append({
+                    "name": name,
+                    "address": address,
+                })
+
+            return {
+                "city": city,
+                "display_name": display_name,
+                "category": category,
+                "total_found": len(results),
+                "places": results,
+            }
+        except Exception as e:
+            logger.error("Error in search_places_by_city: %s", str(e))
+            return {"error": f"Gagal mencari tempat di {city}: {str(e)}"}
+
+    return await asyncio.to_thread(_geocode_and_search)
+
+
 # Map nama tool ke executor function
 TOOL_EXECUTORS = {
     "get_movie_recommendation": get_movie_recommendation,
@@ -1044,6 +1255,8 @@ TOOL_EXECUTORS = {
     "search_drive_files": execute_search_drive_files,
     "upload_to_drive": execute_upload_to_drive,
     "download_from_drive": execute_download_from_drive,
+    "get_nearby_places": get_nearby_places,
+    "search_places_by_city": search_places_by_city,
 }
 
 TOOL_HANDLERS = TOOL_EXECUTORS
@@ -1105,6 +1318,8 @@ async def execute_tool(
         return await executor(chat_id=chat_id)
     elif func_name == "send_voice_message":
         return await executor(chat_id=chat_id, text=args.get("text", ""))
+    elif func_name == "get_nearby_places":
+        return await executor(chat_id=chat_id, **args)
     elif func_name in ("upload_to_drive", "download_from_drive"):
         return await executor(chat_id=chat_id, **args)
     else:

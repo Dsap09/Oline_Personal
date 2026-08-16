@@ -1,199 +1,238 @@
-
-## Brief Fitur: Fallback Cerdas Groq untuk Semua Fungsi (Slow Path)
+## Brief Fitur: Lokasi & Rekomendasi Tempat Terdekat (OpenStreetMap)
 
 ### 🎯 Tujuan
-1. Memastikan **semua fitur Oline tetap berjalan** meskipun API Gemini sedang error (kuota habis, timeout, 404, dll.).
-2. Memanfaatkan **kuota Groq yang besar** (14.400 req/hari) sebagai pengganti otomatis untuk menjalankan *tools*.
-3. Menghilangkan pengalaman "bot error" saat Gemini down, diganti dengan respons yang tetap informatif (meskipun mungkin sedikit kurang akurat).
+Oline mampu:
+1. **Menyimpan lokasi terkini pengguna** (dikirim via Telegram).
+2. **Memberikan rekomendasi tempat terdekat** (cafe, toko buku, restoran, dll.) berdasarkan lokasi tersimpan.
+3. **Memberikan rekomendasi tempat berdasarkan kota/area** (misal: "toko buku di Surabaya").
+4. **Mengirim titik lokasi** hasil rekomendasi ke Telegram (opsional).
 
-### 🏗️ Arsitektur Baru (Slow Path dengan Fallback)
-```
-Permintaan pengguna (butuh tools)
-        │
-        ▼
-Coba Gemini + tools
-        │
-        ├── Berhasil ──▶ Respons Gemini
-        │
-        └── Gagal (exception / timeout)
-                │
-                ▼
-        Coba Groq + tools (fallback)
-                │
-                ├── Berhasil ──▶ Respons Groq (dengan catatan opsional)
-                │
-                └── Gagal ──▶ Pesan lucu Oline (error handling akhir)
-```
+Semua dilakukan dengan bahasa alami, tanpa perintah khusus.
 
-**Catatan:**  
-- Fallback Groq hanya akan dijalankan untuk permintaan **Slow Path** (yang membutuhkan tools). Fast Path sudah menggunakan Groq secara default, jadi tidak terpengaruh.
-- Jika Groq juga gagal (jarang terjadi), Oline akan memberikan pesan ramah, bukan error mentah.
+### 🏗️ Arsitektur & Sumber Data (Gratis)
+
+| Fungsi | Layanan | Keterangan |
+|--------|---------|------------|
+| Geocoding (kota → koordinat) | **Nominatim** (OpenStreetMap) | Tanpa API key, free, cukup untuk personal use |
+| Pencarian tempat (POI) | **Overpass API** (OpenStreetMap) | Tanpa API key, bisa cari berdasarkan kategori & radius |
+| Penyimpanan lokasi | **Vercel KV / Upstash** (existing) | Simpan koordinat per chat ID |
+| Jarak | Perhitungan Haversine di kode | Tidak butuh library tambahan |
 
 ### 🛠️ Langkah Implementasi
 
-#### 1. Tingkatkan Kemampuan `src/groq.py` – Dukungan Function Calling
-Saat ini `chat_groq` hanya menerima pesan teks biasa. Kita perlu fungsi baru yang bisa menerima **tools** dan mengeksekusi *function calling*.
-
-**Buat fungsi `chat_groq_with_tools`:**
-```python
-import json
-from groq import Groq
-
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-GROQ_MODEL = "llama-3.1-8b-instant"
-
-# Import handler tools (dari tools.py)
-from src.tools import TOOL_HANDLERS
-
-async def chat_groq_with_tools(system_prompt: str, history: list, user_message: str, tools: list) -> str:
-    """
-    Panggil Groq dengan function calling.
-    Jika Groq memutuskan memanggil fungsi, eksekusi, lalu kirim ulang hasilnya ke Groq.
-    """
-    messages = [{"role": "system", "content": system_prompt}]
-    for h in history[-10:]:
-        messages.append(h)
-    messages.append({"role": "user", "content": user_message})
-    
-    # Panggil pertama: Groq menentukan apakah perlu tool
-    response = client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=messages,
-        tools=tools,  # Tools dalam format OpenAI
-        tool_choice="auto",
-        temperature=0.9,
-        max_tokens=1024
-    )
-    
-    response_message = response.choices[0].message
-    
-    # Cek apakah Groq ingin memanggil fungsi
-    tool_calls = response_message.tool_calls
-    if not tool_calls:
-        # Tidak ada tool call, langsung kembalikan teks
-        return response_message.content or ""
-    
-    # Ada tool call → eksekusi
-    messages.append(response_message)  # simpan respons Groq yang berisi tool call
-    
-    for tool_call in tool_calls:
-        function_name = tool_call.function.name
-        function_args = json.loads(tool_call.function.arguments)
-        
-        # Panggil handler yang sesuai (dari TOOL_HANDLERS)
-        if function_name in TOOL_HANDLERS:
-            try:
-                function_result = await TOOL_HANDLERS[function_name](**function_args)
-            except Exception as e:
-                function_result = f"Error saat menjalankan fungsi: {e}"
-        else:
-            function_result = f"Fungsi {function_name} tidak dikenal."
-        
-        # Tambahkan hasil tool ke pesan
-        messages.append({
-            "role": "tool",
-            "tool_call_id": tool_call.id,
-            "content": str(function_result)
-        })
-    
-    # Panggil kedua: Groq merangkai respons akhir berdasarkan hasil tool
-    final_response = client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=messages,
-        temperature=0.9,
-        max_tokens=1024
-    )
-    
-    return final_response.choices[0].message.content or ""
+#### 1. Tambahkan Dependensi
+`requirements.txt`:
 ```
-
-**Penting:** Format tools yang dikirim harus kompatibel dengan OpenAI. Gemini tools yang sudah ada mungkin perlu dikonversi (biasanya sudah mirip). Antigravity bisa menyesuaikan jika diperlukan.
-
-#### 2. Pastikan `TOOL_HANDLERS` Tersedia
-Di `src/tools.py`, pastikan ada dictionary yang memetakan nama fungsi ke handler-nya, contoh:
-```python
-TOOL_HANDLERS = {
-    "get_stock_price": get_stock_price,
-    "get_market_summary": get_market_summary,
-    "search_internet": search_internet,
-    "get_weather": get_weather,
-    # ... dan seterusnya
-}
+requests
 ```
-Jika belum ada, buat dictionary ini.
+`geopy` tidak diperlukan; kita hitung jarak manual.
 
-#### 3. Modifikasi `handlers.py` – Fallback di Slow Path
-Di bagian handler yang menangani Slow Path, bungkus pemanggilan Gemini dengan `try-except`. Jika gagal, panggil `chat_groq_with_tools`.
+#### 2. Simpan Lokasi Pengguna
+**Handler Telegram:**
+- Tangkap `update.message.location` (saat user mengirim lokasi).
+- Simpan `latitude`, `longitude` ke Vercel KV:
+  ```python
+  set_kv(f"location:{chat_id}", json.dumps({"lat": lat, "lon": lon}))
+  ```
+- Balas: "Lokasi kamu udah aku simpan! Mau cari apa di sekitar sini? 📍"
 
-```python
-from src.gemini import chat_with_oline  # Gemini
-from src.groq import chat_groq_with_tools  # Groq fallback
+#### 3. Definisikan Tools untuk Gemini
+Dua tool baru:
 
-# Di dalam fungsi handler setelah intent terdeteksi:
-if intent is not None:
-    tools = TOOLS_BY_INTENT.get(intent, [])
-    try:
-        # Coba Gemini dulu
-        response = await chat_with_oline(
-            system_prompt=SYSTEM_PROMPT,
-            history=history,
-            user_message=user_text,
-            tools=tools
-        )
-    except Exception as e:
-        log.warning(f"Gemini gagal, mencoba fallback ke Groq. Error: {e}")
-        try:
-            # Fallback ke Groq dengan tools yang sama
-            response = await chat_groq_with_tools(
-                system_prompt=SYSTEM_PROMPT,
-                history=history,
-                user_message=user_text,
-                tools=tools
-            )
-            # Tambahkan catatan kecil di respons agar user tahu (opsional)
-            response += "\n\n(⚠️ Oline pakai otak cadangan nih, Gemini lagi istirahat~)"
-        except Exception as e2:
-            log.error(f"Groq fallback juga gagal: {e2}")
-            response = "Aduh, Oline lagi error dua-duanya nih. Coba lagi nanti ya, bestie~ 😢"
-```
-
-#### 4. Konversi Tools Gemini ke Format OpenAI (Jika Diperlukan)
-Gemini menggunakan format tools yang berbeda (biasanya dictionary dengan key `function_declarations`). Groq (OpenAI format) membutuhkan format berbeda. Antigravity bisa membuat fungsi kecil untuk mengonversi, atau menyimpan tools dalam format yang kompatibel dengan keduanya.  
-Contoh sederhana: pastikan tools yang dikirim ke `chat_groq_with_tools` sudah dalam format:
+**a. `get_nearby_places`**
 ```python
 {
-    "type": "function",
-    "function": {
-        "name": "get_weather",
-        "description": "...",
-        "parameters": { ... }
+    "name": "get_nearby_places",
+    "description": "Mencari tempat terdekat dari lokasi pengguna yang tersimpan, berdasarkan kategori (misal: cafe, toko buku, restoran).",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "category": {
+                "type": "string",
+                "description": "Kategori tempat, misal 'cafe', 'restaurant', 'bookstore', 'mall'."
+            },
+            "radius_km": {
+                "type": "number",
+                "description": "Radius pencarian dalam kilometer. Default 2."
+            }
+        },
+        "required": ["category"]
     }
 }
 ```
 
-#### 5. Penanganan Timeout
-- Timeout Gemini sudah ada (8 detik). Jika timeout, exception akan dilempar dan langsung ditangkap untuk fallback ke Groq.
-- Timeout Groq bisa diatur lebih longgar (10 detik) untuk memberi kesempatan function calling selesai.
+**b. `search_places_by_city`**
+```python
+{
+    "name": "search_places_by_city",
+    "description": "Mencari tempat berdasarkan nama kota/area dan kategori. Menggunakan geocoding untuk mendapatkan koordinat kota.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "city": {
+                "type": "string",
+                "description": "Nama kota atau area, misal 'Surabaya', 'Bandung', 'Jakarta Selatan'."
+            },
+            "category": {
+                "type": "string",
+                "description": "Kategori tempat, misal 'toko buku', 'cafe', 'mall'."
+            }
+        },
+        "required": ["city", "category"]
+    }
+}
+```
+
+#### 4. Buat Handler Tools di `src/tools.py`
+
+**Fungsi bantu:**
+```python
+import requests
+import math
+
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371  # km
+    dLat = math.radians(lat2 - lat1)
+    dLon = math.radians(lon2 - lon1)
+    a = math.sin(dLat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dLon/2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+
+def overpass_query(lat, lon, category, radius_m=2000):
+    # Konversi kategori ke tag OSM (sederhana)
+    tag_map = {
+        "cafe": "amenity=cafe",
+        "restaurant": "amenity=restaurant",
+        "toko buku": "shop=books",
+        "mall": "shop=mall",
+        "bar": "amenity=bar",
+        "minimarket": "shop=convenience"
+    }
+    tag = tag_map.get(category.lower(), "amenity=" + category.lower())
+    query = f"""
+    [out:json];
+    node[{tag}](around:{radius_m},{lat},{lon});
+    out body 5;
+    """
+    response = requests.post("https://overpass-api.de/api/interpreter", data={"data": query}, timeout=10)
+    return response.json().get("elements", [])
+```
+
+**a. `get_nearby_places`**
+```python
+async def get_nearby_places(category: str, radius_km: float = 2.0) -> str:
+    loc = json.loads(get_kv(f"location:{chat_id}") or "{}")
+    if not loc:
+        return "Lokasi belum disimpan. Minta pengguna kirim lokasi dulu."
+    lat, lon = loc["lat"], loc["lon"]
+    places = overpass_query(lat, lon, category, radius_m=int(radius_km*1000))
+    if not places:
+        return f"Tidak ada {category} dalam {radius_km} km."
+    # Urutkan by jarak
+    results = []
+    for p in places:
+        plat = p.get("lat", lat)
+        plon = p.get("lon", lon)
+        dist = haversine(lat, lon, plat, plon)
+        name = p.get("tags", {}).get("name", "Tanpa nama")
+        address = p.get("tags", {}).get("addr:street", "")
+        results.append((name, address, dist, plat, plon))
+    results.sort(key=lambda x: x[2])
+    lines = []
+    for name, address, dist, plat, plon in results[:5]:
+        lines.append(f"{name} ({dist:.1f} km) {address}")
+    return "\n".join(lines)
+```
+
+**b. `search_places_by_city`**
+```python
+async def search_places_by_city(city: str, category: str) -> str:
+    # Geocode
+    geo = requests.get("https://nominatim.openstreetmap.org/search", params={
+        "q": city, "format": "json", "limit": 1
+    }, headers={"User-Agent": "OlineBot/1.0"}, timeout=10).json()
+    if not geo:
+        return f"Kota/area '{city}' tidak ditemukan."
+    lat = float(geo[0]["lat"])
+    lon = float(geo[0]["lon"])
+    # Search with large radius (misal 5 km)
+    places = overpass_query(lat, lon, category, radius_m=5000)
+    if not places:
+        return f"Tidak ada {category} di {city}."
+    lines = []
+    for p in places[:5]:
+        name = p.get("tags", {}).get("name", "Tanpa nama")
+        address = p.get("tags", {}).get("addr:street", "")
+        lines.append(f"{name} {address}")
+    return "\n".join(lines)
+```
+
+**Daftarkan ke `TOOL_HANDLERS`:**
+```python
+TOOL_HANDLERS.update({
+    "get_nearby_places": get_nearby_places,
+    "search_places_by_city": search_places_by_city
+})
+```
+
+#### 5. Integrasikan ke Intent Detection
+Di `handlers.py`, tambahkan kategori lokasi:
+
+```python
+"lokasi": [
+    "lokasi", "terdekat", "dekat", "cafe", "toko buku", "restoran", "mall",
+    "tempat makan", "kedai", "coffee", "cari tempat", "cari cafe"
+]
+```
+Dan tools mapping:
+```python
+TOOLS_BY_INTENT["lokasi"] = [get_nearby_places_tool, search_places_by_city_tool]
+```
+
+#### 6. Perbarui System Prompt
+Di `personas.py`:
+```text
+- Jika pengguna meminta rekomendasi tempat (cafe, toko, restoran, dll.), gunakan fungsi get_nearby_places atau search_places_by_city.
+- Selalu utamakan get_nearby_places jika pengguna menyebut "terdekat" atau "dekat sini".
+- Jika belum ada lokasi tersimpan, minta pengguna untuk mengirim lokasi.
+- Setelah mendapat hasil, sampaikan dengan gaya Oline yang santai. Boleh tambahkan emoji. Jangan format kaku.
+```
+
+#### 7. Kirim Titik Lokasi (Opsional)
+Setelah Oline memberikan rekomendasi, pengguna bisa minta "kirim titik lokasinya". Handler bisa mengambil koordinat dari hasil sebelumnya (simpan di memori sementara atau state per chat), lalu kirim `context.bot.send_location(chat_id, lat, lon)`.  
+Untuk tahap awal, cukup tampilkan teks alamat. Titik lokasi bisa menyusul.
 
 ### 📁 File yang Perlu Diubah/Dibuat
 | File | Aksi |
 |------|------|
-| `src/groq.py` | Tambah fungsi `chat_groq_with_tools` |
-| `src/tools.py` | Pastikan ada `TOOL_HANDLERS` mapping |
-| `src/handlers.py` | Modifikasi slow path: try Gemini, except Groq fallback |
-| `src/gemini.py` | Pastikan `chat_with_oline` bisa melempar exception yang jelas |
+| `requirements.txt` | Tambahkan `requests` (jika belum ada) |
+| `src/tools.py` | Tambah handler geocoding & Overpass, daftarkan tools |
+| `src/handlers.py` | Tangkap pesan lokasi, simpan ke KV; tambah intent lokasi |
+| `src/personas.py` | Update system prompt |
+| `src/kv.py` | Pastikan fungsi `get_kv`, `set_kv` berjalan baik |
 
-### 🧪 Contoh Percakapan (Saat Gemini Kuota Habis)
+### 🧪 Contoh Percakapan
 ```
-User: Cuaca di Tuban gimana?
-(Proses: Gemini gagal karena kuota habis)
-(Fallback: Groq dipanggil dengan tools cuaca)
-(Groq berhasil ambil data dari OpenWeather, lalu merangkai respons)
-Oline: "Otak utama lagi capek, tapi aku cek pakai cadangan ya~ Cuaca di Tuban sekarang berawan, 26°C. Jangan lupa bawa payung! ☁️"
+User: (kirim lokasi)
+Oline: "Lokasi kamu udah aku simpan! Sekarang bilang aja mau cari apa di sekitar sini. 📍"
+
+User: cafe terdekat
+Oline: "Di sekitar kamu ada 3 cafe:
+☕ Kopi Nako (0,3 km) – Jl. Raya Darmo
+☕ Cold Brew Co (0,7 km) – Jl. Untung Suropati
+☕ Kafe Kita (1,2 km) – Jl. Mayjend Sungkono
+Mau aku kirim titik lokasinya?"
+
+User: toko buku di Surabaya
+Oline: "Di Surabaya ada beberapa toko buku:
+📚 Gramedia Basuki Rahmat – Jl. Basuki Rahmat 8
+📚 Togamas Tunjungan – Jl. Tunjungan 55
+📚 Toko Buku Pustaka – Jl. Diponegoro 12
+Mau detail atau titik lokasi?"
 ```
 
 ### ⚠️ Catatan Penting
-- **Akurasi Groq**: Model `llama-3.1-8b-instant` mungkin kurang akurat dalam memilih tools atau mengekstrak argumen dibanding Gemini. Namun untuk fallback, ini sudah cukup. Jika hasilnya kurang tepat, user bisa mencoba lagi nanti.
-- **Kuota Groq**: Tetap gratis 14.400 req/hari. Pemakaian function calling akan sedikit lebih boros karena dua panggilan (pertama untuk tool choice, kedua untuk final). Tapi masih sangat aman untuk penggunaan pribadi.
-- **Konsistensi Persona**: System prompt yang sama dipakai untuk Groq dan Gemini, sehingga Oline tetap berkepribadian sama.
-- **Logging**: Pastikan setiap fallback tercatat di log Vercel untuk pemantauan.
+- **Rate Limit**: Overpass & Nominatim punya batas wajar. Tambahkan jeda 1 detik antar request. Untuk bot pribadi sangat aman.
+- **Kategori mapping**: Perlu menyempurnakan `tag_map` untuk berbagai kategori (bisa diperluas).
+- **Privasi**: Lokasi hanya disimpan untuk chat ID tertentu, tidak dibagikan.
+- **Timeout**: Overpass kadang lambat; gunakan `timeout=10` dan siapkan fallback jika gagal.
+- **Geocoding Nominatim**: Gunakan header `User-Agent` yang valid, jangan terlalu sering (maks 1 req/detik).

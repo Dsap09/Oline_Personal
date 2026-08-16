@@ -49,6 +49,9 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("help", handle_help))
     application.add_handler(CommandHandler("jurnal", handle_jurnal_command))
     application.add_handler(
+        MessageHandler(filters.LOCATION, handle_location_message)
+    )
+    application.add_handler(
         MessageHandler(filters.Document.ALL | filters.PHOTO, handle_file_message)
     )
     application.add_handler(
@@ -151,7 +154,7 @@ POPULAR_STOCK_TICKERS = [
 
 HEAVY_KEYWORDS = {
     "cuaca": ["cuaca", "hujan", "panas", "suhu", "cerah"],
-    "rekomendasi": ["rekomendasi", "film", "lagu", "buku", "seri", "anime"],
+    "rekomendasi": ["rekomendasi", "film", "lagu", "seri", "anime"],
     "suara": ["suara", "nyanyi", "gombal", "puisi", "bacain", "baca"],
     "jurnal": ["jurnal", "catat", "rekap jurnal"],
     "kuota": ["kuota", "token", "quota"],
@@ -159,7 +162,12 @@ HEAVY_KEYWORDS = {
         "drive", "database", "folder", "simpan file", "buat folder",
         "cari file", "tampilkan isi", "kirim file", "upload", "download", "file",
     ],
-    "search": ["cari", "search", "apa itu", "siapa", "kapan", "dimana", "berita", "definisi", "pengertian"],
+    "lokasi": [
+        "terdekat", "dekat", "toko buku", "cafe", "kafe", "restoran", "restaurant",
+        "mall", "tempat makan", "kedai", "coffee", "cari tempat", "cari cafe", "spbu",
+        "pom bensin", "apotek", "rumah sakit", "bank", "atm", "lokasi terdekat", "lokasi saya",
+    ],
+    "search": ["search", "apa itu", "siapa", "kapan", "dimana", "berita", "definisi", "pengertian", "cari berita", "cari info"],
     "saham": [
         "saham", "ihsg", "indeks", "index", "market", "bursa", "gainer", "loser",
     ] + POPULAR_STOCK_TICKERS,
@@ -321,6 +329,43 @@ async def handle_file_message(
             f"File/Foto '{file_name}' udah Oline terima nih! 📄✨\n\n"
             "Mau Oline simpan ke folder mana di database? "
             "(misal: \"simpan ke folder Skripsi\" atau \"simpan file ini\")"
+        )
+
+
+async def handle_location_message(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """
+    Handler untuk pesan lokasi Telegram (latitude & longitude).
+    Menyimpan koordinat lokasi pengguna ke Vercel KV.
+    """
+    if not update.effective_chat or not update.message or not update.message.location:
+        return
+
+    chat_id = update.effective_chat.id
+
+    if not await check_rate_limit(chat_id):
+        await update.effective_chat.send_message(
+            "sabar ya, kamu udah kebanyakan chat 😅 tunggu sebentar lagi."
+        )
+        return
+
+    location = update.message.location
+    lat = location.latitude
+    lon = location.longitude
+
+    from src.kv import save_user_location
+    success = await save_user_location(chat_id, lat, lon)
+
+    if success:
+        await update.effective_chat.send_message(
+            "Lokasi kamu udah aku simpan! 📍✨\n"
+            "Sekarang tinggal bilang aja mau cari apa di sekitar sini "
+            "(misal: \"cafe terdekat\" atau \"toko buku terdekat\")~"
+        )
+    else:
+        await update.effective_chat.send_message(
+            "aduh, gagal nyimpen lokasi kamu 😢 coba kirim ulang ya."
         )
 
 
