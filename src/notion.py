@@ -43,7 +43,7 @@ async def save_note_to_notion(
     title: str, content: str, category: str = "Umum"
 ) -> dict[str, Any]:
     """
-    Menyimpan catatan baru ke Notion database.
+    Menyimpan catatan baru ke Notion database dengan deteksi skema properti secara dinamis.
     Return dictionary berisi status dan pesan respons.
     """
     api_key = os.environ.get("NOTION_API_KEY", "").strip()
@@ -71,32 +71,67 @@ async def save_note_to_notion(
         "Notion-Version": "2022-06-28",
     }
 
-    payload = {
-        "parent": {"database_id": database_id},
-        "properties": {
-            "Title": {
-                "title": [{"text": {"content": title.strip()}}]
-            },
-            "Kategori": {
-                "select": {"name": (category or "Umum").strip()}
-            },
-            "Tanggal": {
-                "date": {"start": now_iso}
-            },
-        },
-        "children": [
-            {
-                "object": "block",
-                "type": "paragraph",
-                "paragraph": {
-                    "rich_text": [{"type": "text", "text": {"content": content.strip()}}]
-                },
-            }
-        ],
-    }
+    title_key = "Title"
+    date_key = None
+    category_key = None
+    text_key = None
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
+            # 1. Inspeksi Skema Database Notion secara dinamis
+            try:
+                db_resp = await client.get(
+                    f"https://api.notion.com/v1/databases/{database_id}", headers=headers
+                )
+                if db_resp.status_code == 200:
+                    props_schema = db_resp.json().get("properties", {})
+                    for p_name, p_info in props_schema.items():
+                        p_type = p_info.get("type")
+                        p_clean = p_name.strip().lower()
+
+                        if p_type == "title":
+                            title_key = p_name
+                        elif p_type == "date" or "tanggal" in p_clean or "date" in p_clean:
+                            if p_type == "date":
+                                date_key = p_name
+                        elif p_type in ("select", "status") or "kategori" in p_clean or "category" in p_clean:
+                            if p_type in ("select", "status"):
+                                category_key = p_name
+                        elif p_type == "rich_text" or "isi" in p_clean or "content" in p_clean:
+                            if p_type == "rich_text":
+                                text_key = p_name
+            except Exception as schema_err:
+                logger.warning("Gagal membaca skema database Notion: %s", str(schema_err))
+
+            # 2. Susun Payload Properti secara Otomatis
+            properties_payload: dict[str, Any] = {
+                title_key: {"title": [{"text": {"content": title.strip()}}]}
+            }
+
+            if category_key:
+                properties_payload[category_key] = {"select": {"name": (category or "Umum").strip()}}
+            if date_key:
+                properties_payload[date_key] = {"date": {"start": now_iso}}
+            if text_key:
+                properties_payload[text_key] = {
+                    "rich_text": [{"type": "text", "text": {"content": content.strip()}}]
+                }
+
+            payload = {
+                "parent": {"database_id": database_id},
+                "properties": properties_payload,
+                "children": [
+                    {
+                        "object": "block",
+                        "type": "paragraph",
+                        "paragraph": {
+                            "rich_text": [{"type": "text", "text": {"content": content.strip()}}]
+                        },
+                    }
+                ],
+            }
+
+            # 3. Kirim Pembuatan Halaman Baru
             resp = await client.post(NOTION_API_URL, json=payload, headers=headers)
             if resp.status_code == 200:
                 data = resp.json()

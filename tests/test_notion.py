@@ -18,6 +18,10 @@ from src.tools import get_tools_for_intent
 
 class TestNotionIntegration(unittest.IsolatedAsyncioTestCase):
 
+    def setUp(self):
+        os.environ["NOTION_API_KEY"] = "ntn_mock_token_12345"
+        os.environ["NOTION_DATABASE_ID"] = "3ceec30101df806fa6ddf65ab5aa6e40"
+
     def test_extract_database_id(self):
         """Tes fungsi extract_database_id dari berbagai format input Notion."""
         # 1. Full Notion URL
@@ -44,23 +48,28 @@ class TestNotionIntegration(unittest.IsolatedAsyncioTestCase):
         tool_names = [t["name"] for t in tools]
         self.assertIn("save_note_to_notion", tool_names)
 
-    @patch.dict(
-        os.environ,
-        {
-            "NOTION_API_KEY": "ntn_mock_token_12345",
-            "NOTION_DATABASE_ID": "3ceec30101df806fa6ddf65ab5aa6e40",
-        },
-    )
+    @patch("httpx.AsyncClient.get", new_callable=AsyncMock)
     @patch("httpx.AsyncClient.post", new_callable=AsyncMock)
-    async def test_save_note_to_notion_success(self, mock_post):
+    async def test_save_note_to_notion_success(self, mock_post, mock_get):
         """Tes save_note_to_notion mengembalikan status success saat status 200."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
+        mock_get_resp = MagicMock()
+        mock_get_resp.status_code = 200
+        mock_get_resp.json.return_value = {
+            "properties": {
+                "Title": {"type": "title"},
+                "Kategori": {"type": "select"},
+                "Tanggal ": {"type": "date"},
+            }
+        }
+        mock_get.return_value = mock_get_resp
+
+        mock_post_resp = MagicMock()
+        mock_post_resp.status_code = 200
+        mock_post_resp.json.return_value = {
             "id": "page-12345",
             "url": "https://www.notion.so/Ide-riset-AI-agent-3ceec30101df806fa6ddf65ab5aa6e40",
         }
-        mock_post.return_value = mock_response
+        mock_post.return_value = mock_post_resp
 
         res = await save_note_to_notion(
             title="Ide riset AI agent",
@@ -72,20 +81,18 @@ class TestNotionIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res["category"], "Riset")
         self.assertIn("berhasil disimpan", res["message"])
 
-    @patch.dict(
-        os.environ,
-        {
-            "NOTION_API_KEY": "ntn_mock_token_12345",
-            "NOTION_DATABASE_ID": "3ceec30101df806fa6ddf65ab5aa6e40",
-        },
-    )
+    @patch("httpx.AsyncClient.get", new_callable=AsyncMock)
     @patch("httpx.AsyncClient.post", new_callable=AsyncMock)
-    async def test_save_note_to_notion_api_error(self, mock_post):
+    async def test_save_note_to_notion_api_error(self, mock_post, mock_get):
         """Tes save_note_to_notion mengembalikan error saat status != 200."""
-        mock_response = MagicMock()
-        mock_response.status_code = 400
-        mock_response.text = "Invalid database ID"
-        mock_post.return_value = mock_response
+        mock_get_resp = MagicMock()
+        mock_get_resp.status_code = 404
+        mock_get.return_value = mock_get_resp
+
+        mock_post_resp = MagicMock()
+        mock_post_resp.status_code = 400
+        mock_post_resp.text = "Invalid database ID"
+        mock_post.return_value = mock_post_resp
 
         res = await save_note_to_notion(
             title="Catatan Error",
