@@ -26,7 +26,7 @@ INDONESIAN_VOCABULARY = [
     "jurnal", "catat", "rekap", "catatan", "diary",
     "kuota", "token", "quota", "sisa", "pemakaian",
     "eksekusi", "jalankan", "script", "python", "javascript", "coding", "debug", "kode",
-    "notion", "vercel", "deploy", "onlinekan",
+    "notion", "vercel", "deploy", "onlinekan", "gambar", "foto", "image",
     # Kota-kota populer
     "jakarta", "bandung", "yogyakarta", "surabaya", "semarang", "medan", "bali", "bogor",
     # Kata umum percakapan

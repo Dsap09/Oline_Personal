@@ -439,6 +439,27 @@ TOOL_DECLARATIONS = [
             "required": ["project_name", "files"],
         },
     },
+    {
+        "name": "search_and_send_image",
+        "description": (
+            "Mencari gambar di internet dan mengirimkannya langsung sebagai foto ke chat Telegram. "
+            "Gunakan saat pengguna meminta gambar, foto, atau kirim gambar."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Kata kunci pencarian gambar, misal 'ayam', 'pemandangan', 'logo kopi'.",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Jumlah maksimal gambar yang ingin dicari. Default 1.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
 ]
 
 TOOLS_BY_INTENT = {
@@ -460,6 +481,7 @@ TOOLS_BY_INTENT = {
     "coding": ["execute_code"],
     "notion": ["save_note_to_notion"],
     "deploy": ["deploy_to_vercel"],
+    "gambar": ["search_and_send_image"],
 }
 
 
@@ -1479,6 +1501,108 @@ async def deploy_to_vercel(
         return {"error": f"Error saat deploy ke Vercel: {str(e)}"}
 
 
+async def search_and_send_image(
+    chat_id: int, query: str, max_results: int = 1
+) -> dict[str, Any]:
+    """
+    Mencari gambar via DuckDuckGo Images (dengan fallback ke Wikipedia PageImages),
+    mengunduh bytes, dan mengirimkan foto langsung ke Telegram chat pengguna.
+    """
+    if not query or not query.strip():
+        return {"error": "Kata kunci pencarian gambar tidak boleh kosong."}
+
+    image_urls = []
+
+    def _do_ddgs_images():
+        try:
+            try:
+                from ddgs import DDGS
+            except ImportError:
+                from duckduckgo_search import DDGS
+
+            with DDGS() as ddgs:
+                return [r.get("image") for r in ddgs.images(query.strip(), max_results=max_results * 4) if r.get("image")]
+        except Exception as e:
+            logger.warning("DDGS image search warning: %s", str(e))
+            return []
+
+    try:
+        ddgs_urls = await asyncio.to_thread(_do_ddgs_images)
+        image_urls.extend(ddgs_urls)
+    except Exception as e:
+        logger.warning("DDGS thread error: %s", str(e))
+
+    # Fallback ke Wikipedia PageImages API jika DDGS kosong / terblokir DNS ISP
+    if not image_urls:
+        try:
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+                headers = {"User-Agent": "OlineBot/1.0"}
+                wiki_resp = await client.get(
+                    "https://en.wikipedia.org/w/api.php",
+                    params={
+                        "action": "query",
+                        "format": "json",
+                        "generator": "search",
+                        "gsrsearch": query.strip(),
+                        "gsrlimit": 5,
+                        "prop": "pageimages",
+                        "pithumbsize": 800,
+                    },
+                    headers=headers,
+                )
+                if wiki_resp.status_code == 200:
+                    pages = wiki_resp.json().get("query", {}).get("pages", {})
+                    for page in pages.values():
+                        thumb = page.get("thumbnail", {}).get("source")
+                        if thumb:
+                            image_urls.append(thumb)
+        except Exception as wiki_err:
+            logger.warning("Wikipedia image fallback error: %s", str(wiki_err))
+
+    if not image_urls:
+        return {"message": f"Tidak ditemukan gambar yang cocok untuk '{query}'."}
+
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+
+    for img_url in image_urls:
+
+        try:
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+                resp = await client.get(img_url)
+                if resp.status_code != 200:
+                    continue
+
+                img_bytes = resp.content
+                if not img_bytes or len(img_bytes) > 10 * 1024 * 1024:
+                    continue
+
+            if token and chat_id:
+                from telegram import Bot
+                bot = Bot(token=token)
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=img_bytes,
+                    caption=f"🖼️ {query.strip()}",
+                )
+                return {
+                    "status": "success",
+                    "query": query.strip(),
+                    "message": f"Gambar '{query.strip()}' berhasil dikirim langsung ke chat Telegram pengguna.",
+                }
+            else:
+                return {
+                    "status": "success",
+                    "query": query.strip(),
+                    "message": "Gambar berhasil didownload tetapi chat_id/TELEGRAM_BOT_TOKEN tidak dikonfigurasi.",
+                }
+
+        except Exception as err:
+            logger.warning("Failed to fetch/send image candidate %s: %s", img_url, str(err))
+            continue
+
+    return {"error": f"Gagal mengunduh atau mengirimkan gambar untuk '{query}'. Coba kata kunci lain ya."}
+
+
 # Map nama tool ke executor function
 TOOL_EXECUTORS = {
     "get_movie_recommendation": get_movie_recommendation,
@@ -1501,6 +1625,7 @@ TOOL_EXECUTORS = {
     "execute_code": execute_code,
     "save_note_to_notion": save_note_to_notion,
     "deploy_to_vercel": deploy_to_vercel,
+    "search_and_send_image": search_and_send_image,
 }
 
 TOOL_HANDLERS = TOOL_EXECUTORS
@@ -1564,7 +1689,7 @@ async def execute_tool(
         return await executor(chat_id=chat_id, text=args.get("text", ""))
     elif func_name == "get_nearby_places":
         return await executor(chat_id=chat_id, **args)
-    elif func_name in ("upload_to_drive", "download_from_drive"):
+    elif func_name in ("upload_to_drive", "download_from_drive", "search_and_send_image"):
         return await executor(chat_id=chat_id, **args)
     else:
         return await executor(**args)

@@ -183,6 +183,10 @@ HEAVY_KEYWORDS = {
         "deploy", "vercel", "onlinekan", "live", "hosting", "buatkan website",
         "buatkan landing page", "deploy ke vercel", "publikasikan website",
     ],
+    "gambar": [
+        "gambar", "foto", "image", "kirim gambar", "cari gambar", "cari foto",
+        "tampilkan gambar", "kirimi gambar", "cariin gambar", "minta foto", "minta gambar",
+    ],
 }
 
 
