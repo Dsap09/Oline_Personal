@@ -25,6 +25,8 @@ INDONESIAN_VOCABULARY = [
     "suara", "nyanyi", "gombal", "puisi", "baca", "bacain", "dengar",
     "jurnal", "catat", "rekap", "catatan", "diary",
     "kuota", "token", "quota", "sisa", "pemakaian",
+    "eksekusi", "jalankan", "script", "python", "javascript", "coding", "debug", "kode",
+    "notion",
     # Kota-kota populer
     "jakarta", "bandung", "yogyakarta", "surabaya", "semarang", "medan", "bali", "bogor",
     # Kata umum percakapan

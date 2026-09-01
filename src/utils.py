@@ -4,8 +4,29 @@ Berisi parser tanggal Indonesia dan helper umum.
 """
 
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+
+def get_current_time_context() -> str:
+    """
+    Mengembalikan konteks waktu saat ini dalam WIB (UTC+7)
+    dengan format hari, tanggal, bulan, tahun, dan jam.
+    Contoh: "Sekarang adalah hari Kamis, 27 Agustus 2026, pukul 19:20 WIB."
+    """
+    wib = timezone(timedelta(hours=7))
+    now = datetime.now(wib)
+    hari_names = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+    bulan_names = [
+        "", "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+        "Juli", "Agustus", "September", "Oktober", "November", "Desember",
+    ]
+    nama_hari = hari_names[now.weekday()]
+    nama_bulan = bulan_names[now.month]
+    return (
+        f"Sekarang adalah hari {nama_hari}, "
+        f"{now.day} {nama_bulan} {now.year}, pukul {now.strftime('%H:%M')} WIB."
+    )
 
 
 def parse_relative_date(text: str) -> Optional[str]:

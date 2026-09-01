@@ -153,6 +153,9 @@ POPULAR_STOCK_TICKERS = [
 ]
 
 HEAVY_KEYWORDS = {
+    "notion": [
+        "notion", "catat ke notion", "simpan ke notion", "notes notion", "catatan notion",
+    ],
     "cuaca": ["cuaca", "hujan", "panas", "suhu", "cerah"],
     "rekomendasi": ["rekomendasi", "film", "lagu", "seri", "anime"],
     "suara": ["suara", "nyanyi", "gombal", "puisi", "bacain", "baca"],
@@ -171,6 +174,11 @@ HEAVY_KEYWORDS = {
     "saham": [
         "saham", "ihsg", "indeks", "index", "market", "bursa", "gainer", "loser",
     ] + POPULAR_STOCK_TICKERS,
+    "coding": [
+        "jalankan", "eksekusi", "run code", "jalankan kode", "execute",
+        "kode python", "kode javascript", "script", "debug", "coding",
+        "contoh kode", "print", "buat fungsi", "buat script",
+    ],
 }
 
 

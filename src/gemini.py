@@ -20,7 +20,7 @@ from src.personas import (
     OLINE_SYSTEM_PROMPT,
 )
 from src.tools import TOOL_EXECUTORS, get_tools_for_intent
-from src.utils import format_date_indonesian
+from src.utils import format_date_indonesian, get_current_time_context
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +62,8 @@ def _build_system_prompt(memory: str, user_name: str = "Teman") -> str:
     else:
         user_info = "- Nama Pengguna belum diketahui secara pasti. Jika pengguna memberi tahu namanya (misal: 'namaku Doni'), ingat nama tersebut."
 
-    now_date = datetime.now().strftime("%Y-%m-%d")
-    now_str = format_date_indonesian(now_date)
-    user_info += f"\n- Tanggal & Waktu Saat Ini: {now_str} ({now_date}). Gunakan konteks tanggal ini saat menjawab pertanyaan seputar waktu, berita, atau event."
+    time_context = get_current_time_context()
+    user_info += f"\n- Tanggal & Waktu Saat Ini: {time_context} Gunakan konteks tanggal dan jam WIB ini saat menjawab pertanyaan seputar hari, tanggal, jam, waktu, berita, atau event."
 
     prompt = OLINE_SYSTEM_PROMPT.format(user_info_section=user_info)
 

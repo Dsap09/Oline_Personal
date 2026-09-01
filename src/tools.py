@@ -26,6 +26,7 @@ from src.kv import (
 )
 
 
+from src.notion import save_note_to_notion
 from src.utils import format_date_indonesian, parse_relative_date
 from src.voice import (
     generate_elevenlabs_tts,
@@ -43,6 +44,7 @@ OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY", "")
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 ITUNES_BASE_URL = "https://itunes.apple.com"
 OPENWEATHER_BASE_URL = "https://api.openweathermap.org/data/2.5"
+PISTON_EXECUTE_URL = "https://emkc.org/api/v2/piston/execute"
 
 
 # ============================================================
@@ -358,6 +360,49 @@ TOOL_DECLARATIONS = [
             "required": ["city", "category"],
         },
     },
+    {
+        "name": "execute_code",
+        "description": (
+            "Jalankan potongan kode menggunakan Piston API. Dukung banyak bahasa. "
+            "Gunakan saat pengguna meminta mengeksekusi atau menjalankan kode."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "language": {
+                    "type": "string",
+                    "description": "Bahasa pemrograman, misal: python, javascript, cpp, java, dll.",
+                },
+                "code": {
+                    "type": "string",
+                    "description": "Kode sumber yang akan dijalankan.",
+                },
+            },
+            "required": ["language", "code"],
+        },
+    },
+    {
+        "name": "save_note_to_notion",
+        "description": "Menyimpan catatan ke Notion database.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Judul catatan.",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Isi catatan.",
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Kategori catatan (opsional, misal: 'Umum', 'Skripsi', 'Riset', 'Pribadi'). Default: Umum.",
+                },
+            },
+            "required": ["title", "content"],
+        },
+    },
 ]
 
 TOOLS_BY_INTENT = {
@@ -376,6 +421,8 @@ TOOLS_BY_INTENT = {
         "download_from_drive",
     ],
     "lokasi": ["get_nearby_places", "search_places_by_city"],
+    "coding": ["execute_code"],
+    "notion": ["save_note_to_notion"],
 }
 
 
@@ -1238,6 +1285,58 @@ async def search_places_by_city(city: str, category: str) -> dict[str, Any]:
     return await asyncio.to_thread(_geocode_and_search)
 
 
+async def execute_code(language: str, code: str) -> dict[str, Any]:
+    """
+    Eksekusi kode via Piston API.
+    Return output atau error dalam format dictionary.
+    """
+    if not language or not code:
+        return {"error": "Bahasa dan kode harus diisi."}
+
+    payload = {
+        "language": language.lower(),
+        "version": "*",
+        "files": [{"content": code}],
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(PISTON_EXECUTE_URL, json=payload)
+            if resp.status_code != 200:
+                return {
+                    "error": f"Piston API error: {resp.status_code} {resp.text[:200]}"
+                }
+
+            data = resp.json()
+            run = data.get("run", {})
+            stdout = (run.get("stdout") or "").strip()
+            stderr = (run.get("stderr") or "").strip()
+            output = (run.get("output") or "").strip()
+
+            MAX_LEN = 1500
+            if len(stdout) > MAX_LEN:
+                stdout = stdout[:MAX_LEN] + "\n...(output dipotong)"
+            if len(stderr) > MAX_LEN:
+                stderr = stderr[:MAX_LEN] + "\n...(error dipotong)"
+            if len(output) > MAX_LEN:
+                output = output[:MAX_LEN] + "\n...(output dipotong)"
+
+            return {
+                "language": language,
+                "stdout": stdout,
+                "stderr": stderr,
+                "output": output or stdout,
+                "exit_code": run.get("code", 0),
+            }
+    except httpx.TimeoutException:
+        return {
+            "error": "Wah eksekusinya kelamaan (timeout 15 detik), coba kode yang lebih pendek ya~"
+        }
+    except Exception as e:
+        logger.error("Gagal menghubungi Piston API: %s", str(e))
+        return {"error": f"Gagal menghubungi Piston API: {str(e)}"}
+
+
 # Map nama tool ke executor function
 TOOL_EXECUTORS = {
     "get_movie_recommendation": get_movie_recommendation,
@@ -1257,6 +1356,8 @@ TOOL_EXECUTORS = {
     "download_from_drive": execute_download_from_drive,
     "get_nearby_places": get_nearby_places,
     "search_places_by_city": search_places_by_city,
+    "execute_code": execute_code,
+    "save_note_to_notion": save_note_to_notion,
 }
 
 TOOL_HANDLERS = TOOL_EXECUTORS
