@@ -154,3 +154,81 @@ async def save_note_to_notion(
     except Exception as e:
         logger.error("Error saving note to Notion: %s", str(e))
         return {"error": f"Gagal menghubungi Notion API: {str(e)}"}
+
+
+async def add_notion_property(
+    name: str, property_type: str = "files"
+) -> dict[str, Any]:
+    """
+    Menambahkan atau mengedit properti/kolom baru pada skema database Notion.
+    Supported property_type: 'files', 'url', 'select', 'multi_select', 'date', 'checkbox', 'number', 'rich_text'.
+    """
+    api_key = os.environ.get("NOTION_API_KEY", "").strip()
+    raw_db_id = os.environ.get("NOTION_DATABASE_ID", "").strip()
+    database_id = extract_database_id(raw_db_id)
+
+    if not api_key:
+        return {"error": "NOTION_API_KEY belum dikonfigurasi di environment variables."}
+
+    if not database_id:
+        return {"error": "NOTION_DATABASE_ID belum dikonfigurasi atau format ID tidak valid."}
+
+    if not name or not name.strip():
+        return {"error": "Nama properti/kolom tidak boleh kosong."}
+
+    clean_name = name.strip()
+    clean_type = property_type.strip().lower()
+
+    valid_types = {
+        "files": {"files": {}},
+        "file": {"files": {}},
+        "url": {"url": {}},
+        "link": {"url": {}},
+        "select": {"select": {}},
+        "multi_select": {"multi_select": {}},
+        "date": {"date": {}},
+        "tanggal": {"date": {}},
+        "checkbox": {"checkbox": {}},
+        "number": {"number": {}},
+        "rich_text": {"rich_text": {}},
+        "text": {"rich_text": {}},
+    }
+
+    type_payload = valid_types.get(clean_type, {"files": {}})
+    canonical_type = list(type_payload.keys())[0]
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28",
+    }
+
+    payload = {
+        "properties": {
+            clean_name: type_payload
+        }
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.patch(
+                f"https://api.notion.com/v1/databases/{database_id}",
+                json=payload,
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                return {
+                    "status": "success",
+                    "property_name": clean_name,
+                    "property_type": canonical_type,
+                    "message": f"Kolom '{clean_name}' (tipe {canonical_type}) berhasil ditambahkan ke database Notion.",
+                }
+            else:
+                err_body = resp.text[:250]
+                logger.error("Notion PATCH database error (Status %d): %s", resp.status_code, err_body)
+                return {"error": f"Gagal menambahkan kolom ke Notion (Status {resp.status_code}): {err_body}"}
+    except httpx.TimeoutException:
+        return {"error": "Koneksi ke Notion API mengalami timeout (10 detik). Coba lagi nanti ya."}
+    except Exception as e:
+        logger.error("Error in add_notion_property: %s", str(e))
+        return {"error": f"Gagal mengubah skema database Notion: {str(e)}"}

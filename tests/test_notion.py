@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.bot import detect_intent
-from src.notion import extract_database_id, save_note_to_notion
+from src.notion import add_notion_property, extract_database_id, save_note_to_notion
 from src.tools import get_tools_for_intent
 
 
@@ -41,12 +41,26 @@ class TestNotionIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(detect_intent("catat ke notion ide riset"), "notion")
         self.assertEqual(detect_intent("simpan ke notion: halo"), "notion")
         self.assertEqual(detect_intent("buat catatan di notion"), "notion")
+        self.assertEqual(detect_intent("tambah kolom file di notion"), "notion")
 
     def test_get_tools_for_intent_notion(self):
         """Tes pengambilan deklarasi tool untuk intent notion."""
         tools = get_tools_for_intent("notion")
         tool_names = [t["name"] for t in tools]
         self.assertIn("save_note_to_notion", tool_names)
+        self.assertIn("add_notion_property", tool_names)
+
+    @patch("httpx.AsyncClient.patch", new_callable=AsyncMock)
+    async def test_add_notion_property_success(self, mock_patch):
+        """Tes add_notion_property berhasil menambahkan kolom ke Notion database."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_patch.return_value = mock_resp
+
+        res = await add_notion_property(name="File", property_type="files")
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["property_name"], "File")
+        self.assertIn("berhasil ditambahkan", res["message"])
 
     @patch("httpx.AsyncClient.get", new_callable=AsyncMock)
     @patch("httpx.AsyncClient.post", new_callable=AsyncMock)

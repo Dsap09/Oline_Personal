@@ -155,6 +155,8 @@ POPULAR_STOCK_TICKERS = [
 HEAVY_KEYWORDS = {
     "notion": [
         "notion", "catat ke notion", "simpan ke notion", "notes notion", "catatan notion",
+        "tambah kolom", "buat kolom", "edit kolom", "tambah properti", "buat properti",
+        "kolom file", "kolom notion", "tambah atribut",
     ],
     "cuaca": ["cuaca", "hujan", "panas", "suhu", "cerah"],
     "rekomendasi": ["rekomendasi", "film", "lagu", "seri", "anime"],

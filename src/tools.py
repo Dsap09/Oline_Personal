@@ -27,7 +27,7 @@ from src.kv import (
 )
 
 
-from src.notion import save_note_to_notion
+from src.notion import add_notion_property, save_note_to_notion
 from src.utils import format_date_indonesian, parse_relative_date
 from src.voice import (
     generate_elevenlabs_tts,
@@ -461,6 +461,27 @@ TOOL_DECLARATIONS = [
             "required": ["query"],
         },
     },
+    {
+        "name": "add_notion_property",
+        "description": (
+            "Menambahkan atau mengedit kolom/properti pada database Notion (misal: tambah kolom 'File', 'Lampiran', 'Status', 'Link', 'Tanggal'). "
+            "Gunakan saat pengguna meminta menambah, membuat, atau mengedit kolom/properti di Notion."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Nama kolom/properti yang ingin ditambahkan (misal: 'File', 'Lampiran', 'Status').",
+                },
+                "property_type": {
+                    "type": "string",
+                    "description": "Tipe data kolom (misal: 'files', 'url', 'select', 'date', 'checkbox', 'number', 'rich_text'). Default: 'files'.",
+                },
+            },
+            "required": ["name"],
+        },
+    },
 ]
 
 TOOLS_BY_INTENT = {
@@ -480,7 +501,7 @@ TOOLS_BY_INTENT = {
     ],
     "lokasi": ["get_nearby_places", "search_places_by_city"],
     "coding": ["execute_code"],
-    "notion": ["save_note_to_notion"],
+    "notion": ["save_note_to_notion", "add_notion_property"],
     "deploy": ["deploy_to_vercel"],
     "gambar": ["search_and_send_image"],
 }
@@ -1631,6 +1652,7 @@ TOOL_EXECUTORS = {
     "search_places_by_city": search_places_by_city,
     "execute_code": execute_code,
     "save_note_to_notion": save_note_to_notion,
+    "add_notion_property": add_notion_property,
     "deploy_to_vercel": deploy_to_vercel,
     "search_and_send_image": search_and_send_image,
 }
