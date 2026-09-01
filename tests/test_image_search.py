@@ -51,7 +51,7 @@ class TestImageSearch(unittest.IsolatedAsyncioTestCase):
         res = await search_and_send_image(chat_id=12345, query="ayam", max_results=1)
         self.assertEqual(res["status"], "success")
         self.assertEqual(res["query"], "ayam")
-        self.assertIn("berhasil dikirim", res["message"])
+        self.assertIn("Berhasil mengirimkan", res["message"])
 
     @patch("src.tools.asyncio.to_thread", new_callable=AsyncMock)
     async def test_search_and_send_image_empty(self, mock_to_thread):

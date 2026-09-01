@@ -443,7 +443,8 @@ TOOL_DECLARATIONS = [
         "name": "search_and_send_image",
         "description": (
             "Mencari gambar di internet dan mengirimkannya langsung sebagai foto ke chat Telegram. "
-            "Gunakan saat pengguna meminta gambar, foto, atau kirim gambar."
+            "DEFAULT: Kirim 1 gambar saja (max_results=1). "
+            "JANGAN set max_results > 1 kecuali pengguna secara eksplisit meminta jumlah lebih (misal: 'kirim 2 gambar', 'cari 3 foto')."
         ),
         "parameters": {
             "type": "object",
@@ -454,7 +455,7 @@ TOOL_DECLARATIONS = [
                 },
                 "max_results": {
                     "type": "integer",
-                    "description": "Jumlah maksimal gambar yang ingin dicari. Default 1.",
+                    "description": "Jumlah maksimal gambar yang ingin dicari/dikirim. DEFAULT 1. Hanya isi >1 jika pengguna meminta jumlah tertentu.",
                 },
             },
             "required": ["query"],
@@ -1507,10 +1508,12 @@ async def search_and_send_image(
     """
     Mencari gambar via DuckDuckGo Images (dengan fallback ke Wikipedia PageImages),
     mengunduh bytes, dan mengirimkan foto langsung ke Telegram chat pengguna.
+    Default: 1 gambar. Jika max_results > 1, mengirimkan sejumlah max_results gambar yang valid.
     """
     if not query or not query.strip():
         return {"error": "Kata kunci pencarian gambar tidak boleh kosong."}
 
+    target_count = min(max(1, max_results), 5)
     image_urls = []
 
     def _do_ddgs_images():
@@ -1521,7 +1524,7 @@ async def search_and_send_image(
                 from duckduckgo_search import DDGS
 
             with DDGS() as ddgs:
-                return [r.get("image") for r in ddgs.images(query.strip(), max_results=max_results * 4) if r.get("image")]
+                return [r.get("image") for r in ddgs.images(query.strip(), max_results=target_count * 5) if r.get("image")]
         except Exception as e:
             logger.warning("DDGS image search warning: %s", str(e))
             return []
@@ -1544,7 +1547,7 @@ async def search_and_send_image(
                         "format": "json",
                         "generator": "search",
                         "gsrsearch": query.strip(),
-                        "gsrlimit": 5,
+                        "gsrlimit": target_count * 3,
                         "prop": "pageimages",
                         "pithumbsize": 800,
                     },
@@ -1563,8 +1566,11 @@ async def search_and_send_image(
         return {"message": f"Tidak ditemukan gambar yang cocok untuk '{query}'."}
 
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    sent_count = 0
 
     for img_url in image_urls:
+        if sent_count >= target_count:
+            break
 
         try:
             async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
@@ -1579,26 +1585,27 @@ async def search_and_send_image(
             if token and chat_id:
                 from telegram import Bot
                 bot = Bot(token=token)
+                caption = f"🖼️ {query.strip()}" if target_count == 1 else f"🖼️ {query.strip()} ({sent_count + 1}/{target_count})"
                 await bot.send_photo(
                     chat_id=chat_id,
                     photo=img_bytes,
-                    caption=f"🖼️ {query.strip()}",
+                    caption=caption,
                 )
-                return {
-                    "status": "success",
-                    "query": query.strip(),
-                    "message": f"Gambar '{query.strip()}' berhasil dikirim langsung ke chat Telegram pengguna.",
-                }
+                sent_count += 1
             else:
-                return {
-                    "status": "success",
-                    "query": query.strip(),
-                    "message": "Gambar berhasil didownload tetapi chat_id/TELEGRAM_BOT_TOKEN tidak dikonfigurasi.",
-                }
+                sent_count += 1
 
         except Exception as err:
             logger.warning("Failed to fetch/send image candidate %s: %s", img_url, str(err))
             continue
+
+    if sent_count > 0:
+        return {
+            "status": "success",
+            "query": query.strip(),
+            "sent_count": sent_count,
+            "message": f"Berhasil mengirimkan {sent_count} gambar '{query.strip()}' langsung ke chat Telegram pengguna.",
+        }
 
     return {"error": f"Gagal mengunduh atau mengirimkan gambar untuk '{query}'. Coba kata kunci lain ya."}
 
