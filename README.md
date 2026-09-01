@@ -1,6 +1,6 @@
 # Oline – Personal AI Telegram Bot 🤖
 
-Oline adalah bot Telegram asisten pribadi berpersona Gen-Z yang cerdas, cepat, dan serba bisa. Dibangun menggunakan **Python 3.10+**, **Google Gemini AI**, **Groq API**, dan dideploy di **Vercel Serverless Functions**.
+Oline adalah bot Telegram asisten pribadi berpersona Gen-Z yang cerdas, cepat, dan serba bisa. Dibangun menggunakan **Python 3.10+**, **Google Gemini AI**, **Groq API**, **Notion API**, dan dideploy di **Vercel Serverless Functions**.
 
 ---
 
@@ -9,6 +9,9 @@ Oline adalah bot Telegram asisten pribadi berpersona Gen-Z yang cerdas, cepat, d
 - **⚡ Fast Path (Groq API)** — Respon kilat untuk obrolan santai, sapaan, dan pertanyaan ringan menggunakan model `openai/gpt-oss-20b`.
 - **🛠️ Slow Path (Google Gemini API)** — Pemrosesan kecerdasan utama dengan rotasi model otomatis (`gemini-flash-lite-latest`, `gemini-2.5-flash`, `gemini-2.0-flash`) dan Function Calling untuk tugas kompleks.
 - **🛡️ Groq Slow Path Fallback** — Jika Gemini down (kuota habis/429/timeout), Oline otomatis fallback ke Groq dengan dukungan *Function Calling* (2-stage OpenAI tool execution) agar fitur bot tidak pernah mati.
+- **💻 Eksekusi Kode (Piston API)** — Jalankan potongan kode cepat (Python, JavaScript, C++, Java, dll.) langsung dari chat dengan pemotongan output otomatis max 1500 karakter dan timeout 15 detik.
+- **📓 Integrasi Notion Database** — Simpan catatan (judul, isi, kategori, dan tanggal WIB) secara otomatis langsung ke Notion database pengguna (via Notion API).
+- **⏰ Akurasi Waktu Real-Time (WIB)** — Penyuntikan otomatis hari, tanggal, bulan, tahun, dan jam WIB (UTC+7) ke system prompt di semua jalur AI agar jawaban waktu selalu akurat.
 - **🎬 Rekomendasi Film** — Pencarian rekomendasi film berdasarkan genre, mood, atau kata kunci (via TMDb API).
 - **🎵 Rekomendasi Lagu** — Pencarian rekomendasi musik berdasarkan artis, genre, atau kata kunci (via iTunes Search API).
 - **🌤️ Cek Cuaca** — Informasi cuaca real-time dan prakiraan cuaca 5 hari ke depan untuk berbagai kota (via OpenWeatherMap API).
@@ -31,6 +34,8 @@ Oline adalah bot Telegram asisten pribadi berpersona Gen-Z yang cerdas, cepat, d
 | **Database / KV** | Vercel KV / Upstash Redis (REST API Pipeline) |
 | **AI Primary Engine** | Google Gemini API (`google-genai` SDK) |
 | **AI Fast Engine & Fallback** | Groq API (`openai/gpt-oss-20b`) |
+| **Catatan / Productivity** | Notion API (`https://api.notion.com`) |
+| **Eksekusi Kode** | Piston API (`https://emkc.org/api/v2/piston/execute`) |
 | **TTS Voice Engine** | ElevenLabs API |
 | **Cloud Storage** | Google Drive API (OAuth 2.0) |
 | **Integrasi API** | TMDb, OpenWeatherMap, iTunes, yfinance, DuckDuckGo (`ddgs`) |
@@ -46,27 +51,29 @@ Oline adalah bot Telegram asisten pribadi berpersona Gen-Z yang cerdas, cepat, d
 ├── api/
 │   └── index.py                    # Entrypoint serverless Vercel (webhook)
 ├── src/
-│   ├── bot.py                      # Telegram Bot handlers & routing
-│   ├── gemini.py                   # Gemini AI client, model rotation & tool execution
+│   ├── bot.py                      # Telegram Bot handlers & intent routing
+│   ├── gemini.py                   # Gemini AI client, model rotation & system prompt context
 │   ├── groq.py                     # Groq Fast Path & Slow Path fallback (Function Calling)
-│   ├── tools.py                    # Deklarasi tools, OpenAI format converter & executor
+│   ├── tools.py                    # Deklarasi tools, OpenAI format converter & executor registry
+│   ├── notion.py                   # Notion REST API helper (save notes & database ID extractor)
 │   ├── drive.py                    # Google Drive API integration helper
 │   ├── voice.py                    # ElevenLabs TTS & Telegram Voice Note helper
 │   ├── kv.py                       # Vercel KV / Upstash Redis REST helper (pipeline, rate limit)
 │   ├── autocorrect_utils.py        # Normalisasi kata & pembersihan typo
 │   ├── personas.py                 # System prompt & kepribadian Gen-Z Oline
-│   └── utils.py                    # Helper tanggal & format Indonesia
+│   └── utils.py                    # Helper tanggal, waktu WIB real-time & format Indonesia
 ├── scripts/
 │   └── set_webhook.py              # Script setup & inspeksi Webhook Telegram
 ├── tests/
+│   ├── test_code_execution.py      # Unit test Piston API code execution
+│   ├── test_notion.py              # Unit test Notion integration & ID extractor
+│   ├── test_time_context.py        # Unit test WIB time context & prompt injection
 │   ├── test_groq_integration.py    # Integration test Groq Fast Path
 │   ├── test_groq_slowpath.py       # Integration test Groq Slow Path Fallback & Function Calling
 │   ├── test_drive_integration.py   # Unit test Google Drive integration
 │   ├── test_autocorrect.py         # Unit test autocorrect & normalisasi
 │   ├── test_search.py              # Unit test DuckDuckGo search
 │   └── test_local.py               # Unit test local flow
-├── brief.md                        # Spesifikasi teknis fitur fallback
-├── prd.md                          # Product Requirement Document
 ├── requirements.txt
 ├── vercel.json
 ├── .env.example
@@ -97,6 +104,7 @@ Isi variabel utama:
 - `TELEGRAM_BOT_TOKEN`: Dari [@BotFather](https://t.me/BotFather)
 - `GEMINI_API_KEY`: Dari [Google AI Studio](https://aistudio.google.com/apikey)
 - `GROQ_API_KEY`: Dari [Groq Console](https://console.groq.com/keys)
+- `NOTION_API_KEY` & `NOTION_DATABASE_ID`: Dari [Notion Integrations](https://www.notion.so/my-integrations)
 - `TMDB_API_KEY`: Dari [TMDb API](https://www.themoviedb.org/settings/api)
 - `OPENWEATHER_API_KEY`: Dari [OpenWeatherMap](https://openweathermap.org/api)
 - `KV_REST_API_URL` & `KV_REST_API_TOKEN`: Dari [Vercel KV / Upstash Redis](https://vercel.com/storage/kv)
@@ -133,7 +141,7 @@ python scripts/set_webhook.py --info
 Untuk memverifikasi semua fungsi dan integrasi berjalan baik:
 
 ```bash
-python -m unittest discover tests
+python -m unittest discover -s tests -p "test_*.py"
 ```
 
 ---
@@ -143,6 +151,15 @@ python -m unittest discover tests
 ```text
 User: Hai Oline, apa kabar?
 Oline: Haii! Aku baik nih, kamu gimana? Ada yang bisa Oline bantu hari ini? 😊
+
+User: Tanggal berapa sekarang?
+Oline: Sekarang hari Selasa, 1 September 2026, pukul 19:05 WIB. Ada yang mau kamu siapin?
+
+User: Olin, jalankan kode python ini: print("halo dunia")
+Oline: 💻 Output: halo dunia. Gampang banget kan, bestie~
+
+User: Catat ke Notion: "Ide riset AI agent" isinya "Membahas autonomous agent untuk skripsi."
+Oline: 📝 Siap! Catatan 'Ide riset AI agent' udah masuk Notion, kategori Umum~
 
 User: Cuaca besok di Bandung gimana?
 Oline: 🌤️ Kondisi di Bandung besok diprediksi sedikit berawan
