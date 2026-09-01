@@ -179,6 +179,10 @@ HEAVY_KEYWORDS = {
         "kode python", "kode javascript", "script", "debug", "coding",
         "contoh kode", "print", "buat fungsi", "buat script",
     ],
+    "deploy": [
+        "deploy", "vercel", "onlinekan", "live", "hosting", "buatkan website",
+        "buatkan landing page", "deploy ke vercel", "publikasikan website",
+    ],
 }
 
 

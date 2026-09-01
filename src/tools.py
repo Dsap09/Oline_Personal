@@ -8,6 +8,7 @@ import asyncio
 import logging
 import math
 import os
+import re
 from datetime import datetime
 from typing import Any, Optional
 
@@ -403,6 +404,41 @@ TOOL_DECLARATIONS = [
             "required": ["title", "content"],
         },
     },
+    {
+        "name": "deploy_to_vercel",
+        "description": (
+            "Mendeploy file statis (HTML, CSS, JS) ke Vercel dan mengembalikan URL live. "
+            "Gunakan saat pengguna meminta mendeploy website, landing page, atau meng-online-kan kode."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "project_name": {
+                    "type": "string",
+                    "description": "Nama project deployment (hanya huruf, angka, dash, misal: landing-page-minuman).",
+                },
+                "files": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "filename": {
+                                "type": "string",
+                                "description": "Nama file statis, misal: index.html, style.css, script.js.",
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "Isi file lengkap.",
+                            },
+                        },
+                        "required": ["filename", "content"],
+                    },
+                    "description": "Daftar file statis yang akan dideploy.",
+                },
+            },
+            "required": ["project_name", "files"],
+        },
+    },
 ]
 
 TOOLS_BY_INTENT = {
@@ -423,6 +459,7 @@ TOOLS_BY_INTENT = {
     "lokasi": ["get_nearby_places", "search_places_by_city"],
     "coding": ["execute_code"],
     "notion": ["save_note_to_notion"],
+    "deploy": ["deploy_to_vercel"],
 }
 
 
@@ -1372,6 +1409,76 @@ async def execute_code(language: str, code: str) -> dict[str, Any]:
     }
 
 
+async def deploy_to_vercel(
+    project_name: str, files: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """
+    Mendeploy file statis (HTML, CSS, JS) ke Vercel via REST API v13.
+    Return URL live dan status deployment.
+    """
+    token = os.environ.get("VERCEL_API_TOKEN", "").strip()
+    if not token:
+        return {"error": "VERCEL_API_TOKEN belum dikonfigurasi di environment variables."}
+
+    if not project_name or not files:
+        return {"error": "Nama project dan daftar file tidak boleh kosong."}
+
+    import time
+    clean_name = re.sub(r"[^a-z0-9-]", "", project_name.lower().replace(" ", "-")).strip("-")
+    if not clean_name:
+        clean_name = "oline-app"
+
+    slug = f"{clean_name}-{int(time.time())}"
+
+    file_payload = []
+    for f in files:
+        file_payload.append({
+            "file": f.get("filename") or f.get("file", "index.html"),
+            "data": f.get("content") or f.get("data", ""),
+        })
+
+    payload = {
+        "name": slug,
+        "files": file_payload,
+        "projectSettings": {"framework": None},
+        "target": "production",
+    }
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post("https://api.vercel.com/v13/deployments", json=payload, headers=headers)
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                raw_url = data.get("url", "")
+                if raw_url.startswith("//"):
+                    live_url = "https:" + raw_url
+                elif not raw_url.startswith("http"):
+                    live_url = f"https://{raw_url}"
+                else:
+                    live_url = raw_url
+
+                return {
+                    "status": "success",
+                    "project_name": slug,
+                    "url": live_url,
+                    "message": f"Deployment berhasil! Website live di: {live_url}",
+                }
+            else:
+                err_text = resp.text[:250]
+                logger.error("Vercel API error (Status %d): %s", resp.status_code, err_text)
+                return {"error": f"Deploy ke Vercel gagal (Status {resp.status_code}): {err_text}"}
+    except httpx.TimeoutException:
+        return {"error": "Deployment ke Vercel mengalami timeout (20 detik). Coba lagi nanti ya."}
+    except Exception as e:
+        logger.error("Error in deploy_to_vercel: %s", str(e))
+        return {"error": f"Error saat deploy ke Vercel: {str(e)}"}
+
+
 # Map nama tool ke executor function
 TOOL_EXECUTORS = {
     "get_movie_recommendation": get_movie_recommendation,
@@ -1393,6 +1500,7 @@ TOOL_EXECUTORS = {
     "search_places_by_city": search_places_by_city,
     "execute_code": execute_code,
     "save_note_to_notion": save_note_to_notion,
+    "deploy_to_vercel": deploy_to_vercel,
 }
 
 TOOL_HANDLERS = TOOL_EXECUTORS
