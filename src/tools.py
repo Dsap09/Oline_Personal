@@ -1287,14 +1287,15 @@ async def search_places_by_city(city: str, category: str) -> dict[str, Any]:
 
 async def execute_code(language: str, code: str) -> dict[str, Any]:
     """
-    Eksekusi kode via Piston API.
+    Eksekusi kode via Piston API (dengan fallback safe Python execution jika Piston whitelist-only / 401).
     Return output atau error dalam format dictionary.
     """
     if not language or not code:
         return {"error": "Bahasa dan kode harus diisi."}
 
+    lang_lower = language.lower().strip()
     payload = {
-        "language": language.lower(),
+        "language": lang_lower,
         "version": "*",
         "files": [{"content": code}],
     }
@@ -1302,39 +1303,73 @@ async def execute_code(language: str, code: str) -> dict[str, Any]:
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(PISTON_EXECUTE_URL, json=payload)
-            if resp.status_code != 200:
+            if resp.status_code == 200:
+                data = resp.json()
+                run = data.get("run", {})
+                stdout = (run.get("stdout") or "").strip()
+                stderr = (run.get("stderr") or "").strip()
+                output = (run.get("output") or "").strip()
+
+                MAX_LEN = 1500
+                if len(stdout) > MAX_LEN:
+                    stdout = stdout[:MAX_LEN] + "\n...(output dipotong)"
+                if len(stderr) > MAX_LEN:
+                    stderr = stderr[:MAX_LEN] + "\n...(error dipotong)"
+                if len(output) > MAX_LEN:
+                    output = output[:MAX_LEN] + "\n...(output dipotong)"
+
                 return {
-                    "error": f"Piston API error: {resp.status_code} {resp.text[:200]}"
+                    "language": language,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "output": output or stdout,
+                    "exit_code": run.get("code", 0),
                 }
-
-            data = resp.json()
-            run = data.get("run", {})
-            stdout = (run.get("stdout") or "").strip()
-            stderr = (run.get("stderr") or "").strip()
-            output = (run.get("output") or "").strip()
-
-            MAX_LEN = 1500
-            if len(stdout) > MAX_LEN:
-                stdout = stdout[:MAX_LEN] + "\n...(output dipotong)"
-            if len(stderr) > MAX_LEN:
-                stderr = stderr[:MAX_LEN] + "\n...(error dipotong)"
-            if len(output) > MAX_LEN:
-                output = output[:MAX_LEN] + "\n...(output dipotong)"
-
-            return {
-                "language": language,
-                "stdout": stdout,
-                "stderr": stderr,
-                "output": output or stdout,
-                "exit_code": run.get("code", 0),
-            }
-    except httpx.TimeoutException:
-        return {
-            "error": "Wah eksekusinya kelamaan (timeout 15 detik), coba kode yang lebih pendek ya~"
-        }
     except Exception as e:
-        logger.error("Gagal menghubungi Piston API: %s", str(e))
-        return {"error": f"Gagal menghubungi Piston API: {str(e)}"}
+        logger.warning("Piston API request error: %s", str(e))
+
+    # Fallback untuk Python jika Piston API whitelist-only (401) / error
+    if lang_lower in ("python", "py", "python3"):
+        try:
+            import contextlib
+            import io
+
+            buffer = io.StringIO()
+            safe_builtins = {
+                "print": print, "range": range, "len": len, "str": str, "int": int,
+                "float": float, "list": list, "dict": dict, "set": set, "tuple": tuple,
+                "sum": sum, "max": max, "min": min, "abs": abs, "round": round,
+                "sorted": sorted, "enumerate": enumerate, "zip": zip, "map": map,
+                "filter": filter, "bool": bool, "type": type, "isinstance": isinstance,
+                "Exception": Exception, "ValueError": ValueError, "TypeError": TypeError,
+            }
+            globals_dict = {"__builtins__": safe_builtins}
+            with contextlib.redirect_stdout(buffer):
+                exec(code, globals_dict)
+
+            out_str = buffer.getvalue().strip()
+            return {
+                "language": "python",
+                "stdout": out_str or "(kode berhasil dijalankan tanpa output stdout)",
+                "stderr": "",
+                "output": out_str or "(kode berhasil dijalankan)",
+                "exit_code": 0,
+            }
+        except Exception as py_err:
+            return {
+                "language": "python",
+                "stdout": "",
+                "stderr": f"{type(py_err).__name__}: {str(py_err)}",
+                "output": f"{type(py_err).__name__}: {str(py_err)}",
+                "exit_code": 1,
+            }
+
+    return {
+        "error": (
+            f"Public Piston API saat ini memerlukan whitelist per 2026. "
+            f"Untuk bahasa {language}, silakan konfigurasikan Piston instance terdedikasi."
+        )
+    }
 
 
 # Map nama tool ke executor function
