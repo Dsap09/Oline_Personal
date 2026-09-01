@@ -39,3 +39,6 @@ scratch/
 # Node (jika ada)
 node_modules/
 
+# Brief & PRD docs
+brief.md
+prd.md
