@@ -706,6 +706,16 @@ async def get_weather_forecast(
     if not OPENWEATHER_API_KEY:
         return {"error": "OpenWeatherMap API key tidak dikonfigurasi."}
 
+    target_date = date or datetime.now().strftime("%Y-%m-%d")
+    cache_key = f"cache:weather:{city.lower().strip()}:{target_date}"
+    try:
+        from src.kv import get_cache
+        cached_val = await get_cache(cache_key)
+        if cached_val:
+            return json.loads(cached_val)
+    except Exception:
+        pass
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             # Ambil forecast 5 hari
@@ -727,7 +737,7 @@ async def get_weather_forecast(
                 response.raise_for_status()
                 data = response.json()
 
-                return {
+                res = {
                     "city": data.get("name", city),
                     "date": format_date_indonesian(today_str),
                     "temp": data["main"]["temp"],
@@ -737,6 +747,12 @@ async def get_weather_forecast(
                     "condition": data["weather"][0]["description"],
                     "wind_speed": data["wind"]["speed"],
                 }
+                try:
+                    from src.kv import set_cache
+                    await set_cache(cache_key, json.dumps(res), ttl_seconds=600)
+                except Exception:
+                    pass
+                return res
             else:
                 # Gunakan forecast
                 response = await client.get(
@@ -985,6 +1001,15 @@ async def get_stock_price(ticker: str) -> dict[str, Any]:
     import time
 
     ticker_clean = ticker.upper().strip()
+    cache_key = f"cache:stock:{ticker_clean}"
+    try:
+        from src.kv import get_cache
+        cached_val = await get_cache(cache_key)
+        if cached_val:
+            return json.loads(cached_val)
+    except Exception:
+        pass
+
     full_ticker = ticker_clean
     if not full_ticker.endswith('.JK') and full_ticker.isalpha() and len(full_ticker) == 4:
         full_ticker += '.JK'
@@ -1016,7 +1041,14 @@ async def get_stock_price(ticker: str) -> dict[str, Any]:
         }
 
     try:
-        return await asyncio.to_thread(_fetch)
+        res = await asyncio.to_thread(_fetch)
+        if isinstance(res, dict) and "error" not in res:
+            try:
+                from src.kv import set_cache
+                await set_cache(cache_key, json.dumps(res), ttl_seconds=600)
+            except Exception:
+                pass
+        return res
     except Exception as e:
         logger.error("Error getting stock price for %s: %s", ticker, str(e))
         return {"error": f"Gagal ambil data {ticker_clean}: {str(e)}"}

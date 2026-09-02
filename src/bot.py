@@ -241,6 +241,23 @@ async def detect_intent_async(text: str, chat_id: int | None = None) -> str | No
     return None
 
 
+RULE_KEYWORDS = [
+    "jangan panggil", "mulai sekarang", "kedepannya", "ke depannya",
+    "selalu", "ingat", "jangan lupa", "kalo aku minta", "setiap kali",
+    "panggil aku", "panggil saya", "ingat ya", "catat ya",
+]
+
+
+def is_rule_message(text: str) -> bool:
+    """
+    Mendeteksi apakah pesan pengguna berisi instruksi aturan/preferensi baru.
+    """
+    if not text:
+        return False
+    text_lower = text.lower().strip()
+    return any(kw in text_lower for kw in RULE_KEYWORDS)
+
+
 async def handle_message(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -265,17 +282,26 @@ async def handle_message(
         )
         return
 
+    # Ambil nama pengguna dari Telegram
+    user_name = "Teman"
+    if update.effective_user and update.effective_user.first_name:
+        user_name = update.effective_user.first_name
+
+    # Deteksi jika pesan berisi aturan/preferensi baru untuk disimpan ke Notion
+    if is_rule_message(user_message):
+        try:
+            from src.notion import save_memory_to_notion
+            rule_title = f"Aturan dari {user_name}: {user_message[:30]}"
+            await save_memory_to_notion(title=rule_title, content=user_message, memory_type="Aturan")
+        except Exception as rule_err:
+            logger.warning("Gagal menyimpan aturan ke Notion: %s", str(rule_err))
+
     # Deteksi intent untuk menentukan Fast Path / Slow Path (dengan dukungan konteks percakapan)
     intent = await detect_intent_async(user_message, chat_id)
 
     # Kirim "typing" action HANYA untuk Slow Path (fitur berat) untuk memangkas latensi Fast Path
     if intent is not None:
         await update.effective_chat.send_action("typing")
-
-    # Ambil nama pengguna dari Telegram
-    user_name = "Teman"
-    if update.effective_user and update.effective_user.first_name:
-        user_name = update.effective_user.first_name
 
     # Proses lewat Gemini (Fast Path tanpa tools jika intent=None)
     response = await chat_with_oline(chat_id, user_message, user_name=user_name, intent=intent)

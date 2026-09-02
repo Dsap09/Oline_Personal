@@ -55,8 +55,40 @@ def _build_tools(tool_declarations: list[dict]) -> Optional[list[types.Tool]]:
     return [types.Tool(function_declarations=function_declarations)]
 
 
+async def _build_system_prompt_async(memory: str, user_name: str = "Teman") -> str:
+    """Build system prompt lengkap dengan nama pengguna, memori KV, dan memori Notion."""
+    if user_name and user_name not in ("Anonim", "Teman"):
+        user_info = f"- Nama Pengguna: {user_name} (Sapa pengguna secara ramah dan santai dengan nama {user_name})."
+    else:
+        user_info = "- Nama Pengguna belum diketahui secara pasti. Jika pengguna memberi tahu namanya (misal: 'namaku Doni'), ingat nama tersebut."
+
+    time_context = get_current_time_context()
+    user_info += f"\n- Tanggal & Waktu Saat Ini: {time_context} Gunakan konteks tanggal dan jam WIB ini saat menjawab pertanyaan seputar hari, tanggal, jam, waktu, berita, atau event."
+
+    prompt = OLINE_SYSTEM_PROMPT.format(user_info_section=user_info)
+
+    if memory:
+        prompt += MEMORY_INJECTION_TEMPLATE.format(memory=memory)
+
+    # Membaca memori aturan & preferensi dari Notion dengan cache Vercel KV
+    try:
+        from src.notion import read_memory_from_notion
+        aturan = await read_memory_from_notion("Aturan")
+        preferensi = await read_memory_from_notion("Preferensi")
+        if aturan or preferensi:
+            prompt += "\n\n## Memori Aturan & Preferensi dari Notion:\n"
+            if aturan:
+                prompt += f"Aturan Pengguna:\n{aturan}\n"
+            if preferensi:
+                prompt += f"Preferensi Pengguna:\n{preferensi}\n"
+    except Exception as e:
+        logger.warning("Error loading Notion memory for prompt: %s", str(e))
+
+    return prompt
+
+
 def _build_system_prompt(memory: str, user_name: str = "Teman") -> str:
-    """Build system prompt lengkap dengan nama pengguna & memori."""
+    """Fallback synchronous function untuk _build_system_prompt."""
     if user_name and user_name not in ("Anonim", "Teman"):
         user_info = f"- Nama Pengguna: {user_name} (Sapa pengguna secara ramah dan santai dengan nama {user_name})."
     else:
@@ -73,176 +105,44 @@ def _build_system_prompt(memory: str, user_name: str = "Teman") -> str:
     return prompt
 
 
-def _format_history_for_gemini(history: list[dict]) -> list[dict]:
+async def save_daily_summary(chat_id: int) -> str:
     """
-    Convert dan bersihkan riwayat percakapan dari KV ke format Gemini contents.
-    Dibatasi maksimal 10 pesan terakhir (5 putaran percakapan) untuk efisiensi prompt.
-    """
-    if not history:
-        return []
-
-    # Potong maksimal 10 pesan terakhir (5 putaran)
-    recent_history = history[-10:]
-
-    cleaned = []
-    for msg in recent_history:
-        role = msg.get("role", "user")
-        text = msg.get("text", "").strip()
-
-        if not text:
-            continue
-
-        role = "user" if role != "model" else "model"
-
-        if cleaned and cleaned[-1]["role"] == role:
-            cleaned[-1]["parts"][0]["text"] += f"\n{text}"
-        else:
-            cleaned.append({
-                "role": role,
-                "parts": [{"text": text}],
-            })
-
-    if cleaned and cleaned[-1]["role"] == "user":
-        cleaned.pop()
-
-    return cleaned
-
-
-async def _execute_function_call(
-    func_name: str, func_args: dict, chat_id: int
-) -> dict[str, Any]:
-    """
-    Execute sebuah function call dari Gemini dan return hasilnya.
-    """
-    from src.tools import execute_tool
-
-    return await execute_tool(func_name, func_args, chat_id=chat_id)
-
-
-async def _update_memory(
-    chat_id: int, user_message: str, bot_response: str, current_memory: str
-) -> None:
-    """
-    Update memori pengguna menggunakan Gemini.
-    Hanya dipanggil sesekali untuk menjaga efisiensi.
+    Mengumpulkan riwayat percakapan hari ini dari KV, merangkumnya menggunakan Gemini,
+    dan menyimpan hasilnya ke Notion database 'Memori Oline' dengan Jenis = 'Ringkasan'.
     """
     try:
+        history = await get_history(chat_id)
+        if not history:
+            return "Belum ada riwayat percakapan untuk dirangkum hari ini."
+
+        lines = []
+        for item in history:
+            role = "User" if item.get("role") == "user" else "Oline"
+            lines.append(f"{role}: {item.get('text', '')}")
+        raw_chat = "\n".join(lines)
+
+        summary_prompt = f"""Rangkum percakapan berikut secara singkat, padat, dan rapi (maksimal 150 kata):
+{raw_chat}
+
+Tuliskan poin-poin utama yang dibicarakan atau diputuskan."""
+
         client = _get_client()
-        memory_prompt = f"""Kamu adalah asisten yang bertugas merangkum informasi penting dari percakapan.
-
-Memori sebelumnya:
-{current_memory if current_memory else "(Belum ada)"}
-
-Percakapan baru:
-User: {user_message}
-Bot: {bot_response}
-
-Tugas: Perbarui ringkasan memori dengan menambahkan informasi baru yang penting (seperti nama pengguna, hobi, kejadian penting, preferensi). Jaga ringkasan tetap singkat (maksimal 300 kata). Jika tidak ada informasi baru yang relevan, kembalikan memori sebelumnya tanpa perubahan.
-
-Format output: langsung tuliskan ringkasan memori tanpa prefix atau label."""
-
         response = await asyncio.to_thread(
             client.models.generate_content,
             model=GEMINI_MODEL,
-            contents=memory_prompt,
+            contents=summary_prompt,
         )
-        if response and response.text:
-            await save_memory(chat_id, response.text.strip())
+
+        summary_text = response.text.strip() if (response and response.text) else raw_chat[:200]
+
+        from src.notion import save_memory_to_notion
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        title = f"Ringkasan Percakapan {date_str}"
+        res = await save_memory_to_notion(title=title, content=summary_text, memory_type="Ringkasan")
+        return f"Ringkasan percakapan hari ini berhasil disimpan ke Notion! 📝\n\nRingkasan:\n{summary_text}"
     except Exception as e:
-        logger.error("Failed to update memory: %s", str(e))
-
-
-# Model kandidat untuk rotasi & fallback otomatis
-DEFAULT_MODEL_CANDIDATES = [
-    "gemini-flash-lite-latest",
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-flash-latest",
-    "gemini-2.0-flash-lite",
-]
-
-
-def _get_model_candidates() -> list[str]:
-    """Mengembalikan daftar model kandidat, memprioritaskan GEMINI_MODEL dari env jika ada."""
-    configured = os.environ.get("GEMINI_MODEL", "").strip()
-    candidates = list(DEFAULT_MODEL_CANDIDATES)
-    if configured and configured in candidates:
-        candidates.remove(configured)
-        candidates.insert(0, configured)
-    elif configured:
-        candidates.insert(0, configured)
-    return candidates
-
-
-async def _generate_content_with_fallback(
-    system_prompt: str,
-    tools: Optional[list[types.Tool]],
-    contents: Any,
-    timeout_seconds: float = 8.0,
-) -> tuple[Any, str, int]:
-    """
-    Memanggil client.models.generate_content dengan rotasi & fallback otomatis antar model kandidat.
-    Dilengkapi timeout (default 8 detik) menggunakan asyncio.wait_for.
-    Returns: (response, used_model_name, total_tokens)
-    """
-    candidates = _get_model_candidates()
-    client = _get_client()
-    config = types.GenerateContentConfig(
-        system_instruction=system_prompt,
-        tools=tools if tools else None,
-        temperature=0.7,
-    )
-    last_exception = None
-
-    for model_name in candidates:
-        try:
-            response = await asyncio.wait_for(
-                asyncio.to_thread(
-                    client.models.generate_content,
-                    model=model_name,
-                    contents=contents,
-                    config=config,
-                ),
-                timeout=timeout_seconds,
-            )
-            logger.info("Successfully generated content using model: %s", model_name)
-
-            # Token calculation
-            total_tokens = 0
-            if hasattr(response, "usage_metadata") and response.usage_metadata:
-                meta = response.usage_metadata
-                total_tokens = getattr(meta, "total_token_count", 0) or (
-                    getattr(meta, "prompt_token_count", 0)
-                    + getattr(meta, "candidates_token_count", 0)
-                )
-
-            if total_tokens == 0:
-                prompt_len = sum(len(str(c)) for c in contents) if isinstance(contents, list) else len(str(contents))
-                resp_len = len(response.text) if hasattr(response, "text") and response.text else 100
-                total_tokens = max(15, (prompt_len + resp_len) // 4)
-
-            return response, model_name, total_tokens
-
-        except asyncio.TimeoutError:
-            logger.warning(
-                "Model %s timed out after %s seconds. Falling back to next model...",
-                model_name,
-                timeout_seconds,
-            )
-            last_exception = TimeoutError(f"Model {model_name} timed out")
-            continue
-        except Exception as e:
-            logger.warning(
-                "Model %s failed (%s). Falling back to next candidate model...",
-                model_name,
-                str(e),
-            )
-            last_exception = e
-            continue
-
-    if last_exception:
-        raise last_exception
-    raise RuntimeError("All Gemini model candidates failed.")
+        logger.error("Error saving daily summary: %s", str(e))
+        return f"Gagal membuat ringkasan harian: {str(e)}"
 
 
 async def chat_with_oline(
@@ -256,12 +156,17 @@ async def chat_with_oline(
     Mengelola alur: intent tool filter, memori, riwayat, function calling, dan timeout fast/slow path.
     """
     try:
+        # Cek apakah pengguna meminta ringkasan percakapan harian
+        msg_clean = user_message.strip().lower()
+        if msg_clean in ("rekap percakapan hari ini", "ringkasan percakapan hari ini", "rekap percakapan", "ringkasan percakapan"):
+            return await save_daily_summary(chat_id)
+
         # 1. Ambil memori dan riwayat
         memory = await get_memory(chat_id)
         history = await get_history(chat_id)
 
         # 2. Build system prompt
-        system_prompt = _build_system_prompt(memory, user_name=user_name)
+        system_prompt = await _build_system_prompt_async(memory, user_name=user_name)
 
         # 2.5 Fast Path via Groq API (jika intent None dan GROQ_API_KEY diset)
         if intent is None and os.environ.get("GROQ_API_KEY", "").strip():

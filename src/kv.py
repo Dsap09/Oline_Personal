@@ -433,4 +433,60 @@ async def get_user_location(chat_id: int) -> Optional[dict[str, float]]:
     return None
 
 
+# --- Generic Cache & Error Log Functions ---
+
+async def get_cache(key: str) -> Optional[str]:
+    """
+    Mengambil data cache dari Vercel KV berdasarkan key string.
+    Returns str value jika ada, atau None jika tidak ditemukan / expired.
+    """
+    if not key:
+        return None
+    result = await _kv_request(["GET", key])
+    if result and result.get("result"):
+        return str(result["result"])
+    return None
+
+
+async def set_cache(key: str, value: str, ttl_seconds: int = 600) -> bool:
+    """
+    Menyimpan nilai cache ke Vercel KV dengan batas waktu TTL (default 10 menit / 600s).
+    """
+    if not key or value is None:
+        return False
+    result = await _kv_request(["SET", key, str(value), "EX", str(ttl_seconds)])
+    return result is not None
+
+
+async def del_cache(key: str) -> bool:
+    """
+    Menghapus nilai cache dari Vercel KV.
+    """
+    if not key:
+        return False
+    result = await _kv_request(["DEL", key])
+    return result is not None
+
+
+async def log_error(error_message: str) -> bool:
+    """
+    Mencatat log kesalahan teknis ke Vercel KV pada key error_logs:YYYY-MM-DD.
+    TTL 48 jam (172800 detik).
+    """
+    if not error_message:
+        return False
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    key = f"error_logs:{date_str}"
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    entry = f"[{timestamp}] {error_message}"
+
+    existing = await _kv_request(["GET", key])
+    if existing and existing.get("result"):
+        entry = str(existing["result"]) + "\n" + entry
+
+    result = await _kv_request(["SET", key, entry, "EX", "172800"])
+    return result is not None
+
+
+
 
