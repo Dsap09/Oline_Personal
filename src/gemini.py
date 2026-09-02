@@ -105,6 +105,176 @@ def _build_system_prompt(memory: str, user_name: str = "Teman") -> str:
     return prompt
 
 
+def _format_history_for_gemini(history: list[dict]) -> list[dict]:
+    """
+    Convert dan bersihkan riwayat percakapan dari KV ke format Gemini contents.
+    Dibatasi maksimal 10 pesan terakhir (5 putaran percakapan) untuk efisiensi prompt.
+    """
+    if not history:
+        return []
+
+    recent_history = history[-10:]
+
+    cleaned = []
+    for msg in recent_history:
+        role = msg.get("role", "user")
+        text = msg.get("text", "").strip()
+
+        if not text:
+            continue
+
+        role = "user" if role != "model" else "model"
+
+        if cleaned and cleaned[-1]["role"] == role:
+            cleaned[-1]["parts"][0]["text"] += f"\n{text}"
+        else:
+            cleaned.append({
+                "role": role,
+                "parts": [{"text": text}],
+            })
+
+    if cleaned and cleaned[-1]["role"] == "user":
+        cleaned.pop()
+
+    return cleaned
+
+
+async def _execute_function_call(
+    func_name: str, func_args: dict, chat_id: int
+) -> dict[str, Any]:
+    """
+    Execute sebuah function call dari Gemini dan return hasilnya.
+    """
+    from src.tools import execute_tool
+
+    return await execute_tool(func_name, func_args, chat_id=chat_id)
+
+
+async def _update_memory(
+    chat_id: int, user_message: str, bot_response: str, current_memory: str
+) -> None:
+    """
+    Update memori pengguna menggunakan Gemini.
+    Hanya dipanggil sesekali untuk menjaga efisiensi.
+    """
+    try:
+        client = _get_client()
+        memory_prompt = f"""Kamu adalah asisten yang bertugas merangkum informasi penting dari percakapan.
+
+Memori sebelumnya:
+{current_memory if current_memory else "(Belum ada)"}
+
+Percakapan baru:
+User: {user_message}
+Bot: {bot_response}
+
+Tugas: Perbarui ringkasan memori dengan menambahkan informasi baru yang penting (seperti nama pengguna, hobi, kejadian penting, preferensi). Jaga ringkasan tetap singkat (maksimal 300 kata). Jika tidak ada informasi baru yang relevan, kembalikan memori sebelumnya tanpa perubahan.
+
+Format output: langsung tuliskan ringkasan memori tanpa prefix atau label."""
+
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model=GEMINI_MODEL,
+            contents=memory_prompt,
+        )
+        if response and response.text:
+            await save_memory(chat_id, response.text.strip())
+    except Exception as e:
+        logger.error("Failed to update memory: %s", str(e))
+
+
+# Model kandidat untuk rotasi & fallback otomatis
+DEFAULT_MODEL_CANDIDATES = [
+    "gemini-flash-lite-latest",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-flash-latest",
+    "gemini-2.0-flash-lite",
+]
+
+
+def _get_model_candidates() -> list[str]:
+    """Mengembalikan daftar model kandidat, memprioritaskan GEMINI_MODEL dari env jika ada."""
+    configured = os.environ.get("GEMINI_MODEL", "").strip()
+    candidates = list(DEFAULT_MODEL_CANDIDATES)
+    if configured and configured in candidates:
+        candidates.remove(configured)
+        candidates.insert(0, configured)
+    elif configured:
+        candidates.insert(0, configured)
+    return candidates
+
+
+async def _generate_content_with_fallback(
+    system_prompt: str,
+    tools: Optional[list[types.Tool]],
+    contents: Any,
+    timeout_seconds: float = 8.0,
+) -> tuple[Any, str, int]:
+    """
+    Memanggil client.models.generate_content dengan rotasi & fallback otomatis antar model kandidat.
+    Dilengkapi timeout (default 8 detik) menggunakan asyncio.wait_for.
+    Returns: (response, used_model_name, total_tokens)
+    """
+    candidates = _get_model_candidates()
+    client = _get_client()
+    config = types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        tools=tools if tools else None,
+        temperature=0.7,
+    )
+    last_exception = None
+
+    for model_name in candidates:
+        try:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.models.generate_content,
+                    model=model_name,
+                    contents=contents,
+                    config=config,
+                ),
+                timeout=timeout_seconds,
+            )
+            logger.info("Successfully generated content using model: %s", model_name)
+
+            total_tokens = 0
+            if hasattr(response, "usage_metadata") and response.usage_metadata:
+                meta = response.usage_metadata
+                total_tokens = getattr(meta, "total_token_count", 0) or (
+                    getattr(meta, "prompt_token_count", 0)
+                    + getattr(meta, "candidates_token_count", 0)
+                )
+
+            if total_tokens == 0:
+                prompt_len = sum(len(str(c)) for c in contents) if isinstance(contents, list) else len(str(contents))
+                resp_len = len(response.text) if hasattr(response, "text") and response.text else 100
+                total_tokens = max(15, (prompt_len + resp_len) // 4)
+
+            return response, model_name, total_tokens
+
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Model %s timed out after %s seconds. Falling back to next model...",
+                model_name,
+                timeout_seconds,
+            )
+            last_exception = TimeoutError(f"Model {model_name} timed out")
+            continue
+        except Exception as e:
+            logger.warning(
+                "Model %s failed (%s). Falling back to next candidate model...",
+                model_name,
+                str(e),
+            )
+            last_exception = e
+            continue
+
+    if last_exception:
+        raise last_exception
+    raise RuntimeError("All Gemini model candidates failed.")
+
+
 async def save_daily_summary(chat_id: int) -> str:
     """
     Mengumpulkan riwayat percakapan hari ini dari KV, merangkumnya menggunakan Gemini,

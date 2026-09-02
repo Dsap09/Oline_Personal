@@ -236,6 +236,53 @@ async def add_notion_property(
 
 # --- Notion Hybrid Memory Functions ---
 
+async def _inspect_and_ensure_memory_schema(
+    client: httpx.AsyncClient, database_id: str, headers: dict
+) -> tuple[str, Optional[str], Optional[str]]:
+    """
+    Inspeksi skema database Notion dan pastikan properti Title, Jenis (select), dan Tanggal (date) ada.
+    Returns: (title_key, category_key, date_key)
+    """
+    title_key = "Title"
+    category_key = None
+    date_key = None
+
+    try:
+        db_resp = await client.get(
+            f"https://api.notion.com/v1/databases/{database_id}", headers=headers
+        )
+        if db_resp.status_code == 200:
+            props = db_resp.json().get("properties", {})
+            for p_name, p_info in props.items():
+                p_type = p_info.get("type")
+                p_clean = p_name.strip().lower()
+                if p_type == "title":
+                    title_key = p_name
+                elif p_type in ("select", "status"):
+                    if p_clean in ("jenis", "kategori", "category", "type") or not category_key:
+                        category_key = p_name
+                elif p_type == "date":
+                    if p_clean in ("tanggal", "date") or not date_key:
+                        date_key = p_name
+
+            # Jika properti select/category 'Jenis' tidak ada di skema, otomatis buat via PATCH database API
+            if not category_key:
+                try:
+                    patch_resp = await client.patch(
+                        f"https://api.notion.com/v1/databases/{database_id}",
+                        json={"properties": {"Jenis": {"select": {}}}},
+                        headers=headers,
+                    )
+                    if patch_resp.status_code == 200:
+                        category_key = "Jenis"
+                except Exception as patch_err:
+                    logger.warning("Gagal menambahkan properti 'Jenis' ke Notion: %s", str(patch_err))
+    except Exception as e:
+        logger.warning("Gagal inspeksi skema Notion memory database: %s", str(e))
+
+    return title_key, category_key, date_key
+
+
 async def save_memory_to_notion(
     title: str, content: str, memory_type: str = "Aturan"
 ) -> str:
@@ -266,26 +313,34 @@ async def save_memory_to_notion(
         "Notion-Version": "2022-06-28",
     }
 
-    payload = {
-        "parent": {"database_id": database_id},
-        "properties": {
-            "Title": {"title": [{"text": {"content": title.strip()}}]},
-            "Jenis": {"select": {"name": (memory_type or "Aturan").strip()}},
-            "Tanggal": {"date": {"start": now_iso}},
-        },
-        "children": [
-            {
-                "object": "block",
-                "type": "paragraph",
-                "paragraph": {
-                    "rich_text": [{"type": "text", "text": {"content": content.strip()}}]
-                },
-            }
-        ],
-    }
-
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
+            title_key, category_key, date_key = await _inspect_and_ensure_memory_schema(
+                client, database_id, headers
+            )
+
+            properties_payload: dict[str, Any] = {
+                title_key: {"title": [{"text": {"content": title.strip()}}]}
+            }
+            if category_key:
+                properties_payload[category_key] = {"select": {"name": (memory_type or "Aturan").strip()}}
+            if date_key:
+                properties_payload[date_key] = {"date": {"start": now_iso}}
+
+            payload = {
+                "parent": {"database_id": database_id},
+                "properties": properties_payload,
+                "children": [
+                    {
+                        "object": "block",
+                        "type": "paragraph",
+                        "paragraph": {
+                            "rich_text": [{"type": "text", "text": {"content": content.strip()}}]
+                        },
+                    }
+                ],
+            }
+
             resp = await client.post("https://api.notion.com/v1/pages", json=payload, headers=headers)
             if resp.status_code == 200:
                 await clear_memory_cache(memory_type)
@@ -323,15 +378,19 @@ async def read_memory_from_notion(memory_type: Optional[str] = None) -> str:
         "Notion-Version": "2022-06-28",
     }
 
-    payload: dict[str, Any] = {}
-    if memory_type:
-        payload["filter"] = {
-            "property": "Jenis",
-            "select": {"equals": memory_type.strip()},
-        }
-
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
+            title_key, category_key, date_key = await _inspect_and_ensure_memory_schema(
+                client, database_id, headers
+            )
+
+            payload: dict[str, Any] = {}
+            if memory_type and category_key:
+                payload["filter"] = {
+                    "property": category_key,
+                    "select": {"equals": memory_type.strip()},
+                }
+
             resp = await client.post(
                 f"https://api.notion.com/v1/databases/{database_id}/query",
                 json=payload,
@@ -345,9 +404,9 @@ async def read_memory_from_notion(memory_type: Optional[str] = None) -> str:
             lines = []
             for page in data.get("results", []):
                 props = page.get("properties", {})
-                title_prop = props.get("Title", {}).get("title", [])
-                if title_prop:
-                    title_text = title_prop[0].get("text", {}).get("content", "").strip()
+                t_prop = props.get(title_key, {}).get("title", []) or props.get("Title", {}).get("title", [])
+                if t_prop:
+                    title_text = t_prop[0].get("text", {}).get("content", "").strip()
                     if title_text:
                         lines.append(f"- {title_text}")
 
