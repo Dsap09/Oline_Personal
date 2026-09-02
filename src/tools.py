@@ -482,6 +482,35 @@ TOOL_DECLARATIONS = [
             "required": ["name"],
         },
     },
+    {
+        "name": "list_vercel_deployments",
+        "description": (
+            "Mengambil daftar deployment yang ada di Vercel. "
+            "Gunakan saat pengguna meminta melihat daftar landing page atau deployment yang pernah dibuat."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "delete_vercel_deployment",
+        "description": (
+            "Menghapus deployment Vercel berdasarkan deployment ID. "
+            "Gunakan saat pengguna ingin menghapus landing page atau deployment tertentu setelah mengonfirmasi pilihan."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "deployment_id": {
+                    "type": "string",
+                    "description": "ID deployment Vercel yang akan dihapus (misal: dpl_12345).",
+                }
+            },
+            "required": ["deployment_id"],
+        },
+    },
 ]
 
 TOOLS_BY_INTENT = {
@@ -502,7 +531,11 @@ TOOLS_BY_INTENT = {
     "lokasi": ["get_nearby_places", "search_places_by_city"],
     "coding": ["execute_code"],
     "notion": ["save_note_to_notion", "add_notion_property"],
-    "deploy": ["deploy_to_vercel"],
+    "deploy": [
+        "deploy_to_vercel",
+        "list_vercel_deployments",
+        "delete_vercel_deployment",
+    ],
     "gambar": ["search_and_send_image"],
 }
 
@@ -1523,6 +1556,93 @@ async def deploy_to_vercel(
         return {"error": f"Error saat deploy ke Vercel: {str(e)}"}
 
 
+async def list_vercel_deployments() -> dict[str, Any]:
+    """
+    Mengambil daftar deployment yang ada di Vercel via REST API v13.
+    """
+    token = os.environ.get("VERCEL_API_TOKEN", "").strip()
+    if not token:
+        return {"error": "VERCEL_API_TOKEN belum dikonfigurasi di environment variables."}
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get("https://api.vercel.com/v13/deployments", headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                raw_deployments = data.get("deployments", [])
+                if not raw_deployments:
+                    return {"message": "Belum ada deployment di Vercel."}
+
+                deployments = []
+                for d in raw_deployments[:10]:
+                    raw_url = d.get("url", "")
+                    url = f"https://{raw_url}" if raw_url and not raw_url.startswith("http") else raw_url
+                    deployments.append({
+                        "id": d.get("uid") or d.get("id", ""),
+                        "name": d.get("name", "tanpa nama"),
+                        "url": url,
+                        "created_at": d.get("created"),
+                    })
+
+                return {
+                    "status": "success",
+                    "total": len(deployments),
+                    "deployments": deployments,
+                }
+            else:
+                err_text = resp.text[:250]
+                logger.error("Vercel list deployments API error (Status %d): %s", resp.status_code, err_text)
+                return {"error": f"Gagal mengambil daftar deployment (Status {resp.status_code}): {err_text}"}
+    except httpx.TimeoutException:
+        return {"error": "Gagal mengambil daftar deployment Vercel: Timeout (15 detik)."}
+    except Exception as e:
+        logger.error("Error in list_vercel_deployments: %s", str(e))
+        return {"error": f"Error saat mengambil daftar deployment Vercel: {str(e)}"}
+
+
+async def delete_vercel_deployment(deployment_id: str) -> dict[str, Any]:
+    """
+    Menghapus deployment Vercel berdasarkan deployment ID via REST API v13.
+    """
+    token = os.environ.get("VERCEL_API_TOKEN", "").strip()
+    if not token:
+        return {"error": "VERCEL_API_TOKEN belum dikonfigurasi di environment variables."}
+
+    if not deployment_id or not str(deployment_id).strip():
+        return {"error": "deployment_id tidak boleh kosong."}
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    clean_id = str(deployment_id).strip()
+    url = f"https://api.vercel.com/v13/deployments/{clean_id}"
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.delete(url, headers=headers)
+            if resp.status_code in (200, 204):
+                return {
+                    "status": "success",
+                    "deployment_id": clean_id,
+                    "message": f"Deployment '{clean_id}' berhasil dihapus dari Vercel.",
+                }
+            else:
+                err_text = resp.text[:250]
+                logger.error("Vercel delete deployment API error (Status %d): %s", resp.status_code, err_text)
+                return {"error": f"Gagal menghapus deployment (Status {resp.status_code}): {err_text}"}
+    except httpx.TimeoutException:
+        return {"error": "Gagal menghapus deployment Vercel: Timeout (15 detik)."}
+    except Exception as e:
+        logger.error("Error in delete_vercel_deployment: %s", str(e))
+        return {"error": f"Error saat menghapus deployment Vercel: {str(e)}"}
+
+
 async def search_and_send_image(
     chat_id: int, query: str, max_results: int = 1
 ) -> dict[str, Any]:
@@ -1654,6 +1774,8 @@ TOOL_EXECUTORS = {
     "save_note_to_notion": save_note_to_notion,
     "add_notion_property": add_notion_property,
     "deploy_to_vercel": deploy_to_vercel,
+    "list_vercel_deployments": list_vercel_deployments,
+    "delete_vercel_deployment": delete_vercel_deployment,
     "search_and_send_image": search_and_send_image,
 }
 
