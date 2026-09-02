@@ -35,6 +35,14 @@ class TestHybridMemory(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(is_rule_message("cuaca di Bandung hari ini gimana?"))
         self.assertFalse(is_rule_message("rekomendasi film horor dong"))
 
+    def test_generate_memory_title(self):
+        """Tes pembuatan judul ringkas dari pesan aturan."""
+        from src.bot import generate_memory_title
+        long_rule = "lin kedepannya kalo aku minta kamu buat landing page trs aku minta kamu edit atau tambahin halaman kamu deploy nya di tempat yg sama ya biar ga numpuk"
+        title = generate_memory_title(long_rule)
+        self.assertLessEqual(len(title), 80)
+        self.assertIn("kalo aku minta kamu buat landing page", title)
+
     @patch("src.kv._kv_request", new_callable=AsyncMock)
     async def test_kv_generic_cache(self, mock_kv_request):
         """Tes fungsi cache generik KV (get_cache, set_cache, del_cache)."""
@@ -56,20 +64,23 @@ class TestHybridMemory(unittest.IsolatedAsyncioTestCase):
         res = await log_error("Database timeout 504")
         self.assertTrue(res)
 
+    @patch("src.notion.read_memory_from_notion", new_callable=AsyncMock)
     @patch("httpx.AsyncClient.post", new_callable=AsyncMock)
     @patch("src.kv._kv_request", new_callable=AsyncMock)
-    async def test_save_memory_to_notion(self, mock_kv, mock_post):
-        """Tes menyimpan memori baru ke Notion."""
+    async def test_save_memory_to_notion(self, mock_kv, mock_post, mock_read_mem):
+        """Tes menyimpan memori baru ke Notion dengan write-through cache update."""
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {"id": "page_12345"}
         mock_post.return_value = mock_resp
         mock_kv.return_value = {"result": "OK"}
+        mock_read_mem.return_value = "- Aturan dari Aga: Panggil aku Aga"
 
         res = await save_memory_to_notion(
             title="Aturan dari Aga", content="Panggil aku Aga", memory_type="Aturan"
         )
         self.assertEqual(res, "Memori berhasil disimpan.")
+        self.assertTrue(mock_read_mem.called)
 
     @patch("httpx.AsyncClient.post", new_callable=AsyncMock)
     @patch("src.kv._kv_request", new_callable=AsyncMock)

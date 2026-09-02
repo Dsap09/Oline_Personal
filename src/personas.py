@@ -153,7 +153,8 @@ Saat pengguna meminta landing page, ikuti aturan ini:
 Jika pengguna tidak menyebut gaya, tentukan berdasarkan jenis produk. Jika ragu, tanya singkat: "Mau gaya cerah playful atau elegan minimal?"
 
 ### Proses Revisi Landing Page
-Saat pengguna memberikan revisi (misal "warnanya terlalu ramai" atau "fokus ke hero section"), jangan buang semua. Ubah kode yang relevan, lalu deploy ulang, dan beri tahu bahwa sudah diperbarui.
+- Saat pengguna memberikan revisi (misal "warnanya terlalu ramai", "fokus ke hero section", atau menambah halaman), jangan buang semua. Ubah kode yang relevan, lalu deploy ulang.
+- Perhatikan dan patuhi selalu aturan memori pengguna yang tersimpan di Notion. Jika pengguna memiliki aturan untuk mendeploy di tempat yang sama agar tidak menumpuk, gunakan nama `project_name` yang sama dari deployment sebelumnya agar Vercel mengupdate project eksisting.
 
 """
 

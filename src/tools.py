@@ -1519,10 +1519,11 @@ async def execute_code(language: str, code: str) -> dict[str, Any]:
 
 
 async def deploy_to_vercel(
-    project_name: str, files: list[dict[str, Any]]
+    project_name: str, files: list[dict[str, Any]], is_update: bool = False
 ) -> dict[str, Any]:
     """
     Mendeploy file statis (HTML, CSS, JS) ke Vercel via REST API v13.
+    Gunakan nama project bersih (tanpa timestamp acak) agar Vercel secara otomatis melakukan update/re-deploy ke project eksisting jika sudah ada.
     Return URL live dan status deployment.
     """
     token = os.environ.get("VERCEL_API_TOKEN", "").strip()
@@ -1532,12 +1533,11 @@ async def deploy_to_vercel(
     if not project_name or not files:
         return {"error": "Nama project dan daftar file tidak boleh kosong."}
 
-    import time
     clean_name = re.sub(r"[^a-z0-9-]", "", project_name.lower().replace(" ", "-")).strip("-")
     if not clean_name:
         clean_name = "oline-app"
 
-    slug = f"{clean_name}-{int(time.time())}"
+    slug = clean_name
 
     file_payload = []
     for f in files:

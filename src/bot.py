@@ -248,6 +248,39 @@ RULE_KEYWORDS = [
 ]
 
 
+def generate_memory_title(rule_text: str) -> str:
+    """
+    Menghasilkan judul singkat (maksimal 50-80 karakter) dari kalimat aturan/preferensi.
+    Mencari keyword yang muncul paling awal dalam teks.
+    """
+    if not rule_text:
+        return "Aturan Memori"
+
+    rule_clean = rule_text.strip()
+    rule_lower = rule_clean.lower()
+    keywords = ["panggil", "jangan", "selalu", "setiap", "kalo", "kalau", "jika", "mulai sekarang", "kedepannya", "ke depannya", "deploy"]
+
+    earliest_idx = -1
+    for kw in keywords:
+        idx = rule_lower.find(kw)
+        if idx != -1:
+            if earliest_idx == -1 or idx < earliest_idx:
+                earliest_idx = idx
+
+    if earliest_idx != -1:
+        extracted = rule_clean[earliest_idx:].strip()
+        if len(extracted) > 5:
+            res_title = extracted[:60].strip()
+            if len(extracted) > 60:
+                res_title += "..."
+            return res_title
+
+    res_title = rule_clean[:60].strip()
+    if len(rule_clean) > 60:
+        res_title += "..."
+    return res_title
+
+
 def is_rule_message(text: str) -> bool:
     """
     Mendeteksi apakah pesan pengguna berisi instruksi aturan/preferensi baru.
@@ -291,7 +324,7 @@ async def handle_message(
     if is_rule_message(user_message):
         try:
             from src.notion import save_memory_to_notion
-            rule_title = f"Aturan dari {user_name}: {user_message[:30]}"
+            rule_title = generate_memory_title(user_message)
             await save_memory_to_notion(title=rule_title, content=user_message, memory_type="Aturan")
         except Exception as rule_err:
             logger.warning("Gagal menyimpan aturan ke Notion: %s", str(rule_err))

@@ -238,14 +238,15 @@ async def add_notion_property(
 
 async def _inspect_and_ensure_memory_schema(
     client: httpx.AsyncClient, database_id: str, headers: dict
-) -> tuple[str, Optional[str], Optional[str]]:
+) -> tuple[str, Optional[str], Optional[str], Optional[str]]:
     """
-    Inspeksi skema database Notion dan pastikan properti Title, Jenis (select), dan Tanggal (date) ada.
-    Returns: (title_key, category_key, date_key)
+    Inspeksi skema database Notion dan pastikan properti Title, Jenis (select), Tanggal (date), dan Isi (rich_text) ada.
+    Returns: (title_key, category_key, date_key, isi_key)
     """
     title_key = "Title"
     category_key = None
     date_key = None
+    isi_key = None
 
     try:
         db_resp = await client.get(
@@ -264,23 +265,35 @@ async def _inspect_and_ensure_memory_schema(
                 elif p_type == "date":
                     if p_clean in ("tanggal", "date") or not date_key:
                         date_key = p_name
+                elif p_type == "rich_text":
+                    if p_clean in ("isi", "content", "detail", "text") or not isi_key:
+                        isi_key = p_name
 
-            # Jika properti select/category 'Jenis' tidak ada di skema, otomatis buat via PATCH database API
+            # Patch database jika ada properti penting yang belum ada
+            missing_props = {}
             if not category_key:
+                missing_props["Jenis"] = {"select": {}}
+            if not isi_key:
+                missing_props["Isi"] = {"rich_text": {}}
+
+            if missing_props:
                 try:
                     patch_resp = await client.patch(
                         f"https://api.notion.com/v1/databases/{database_id}",
-                        json={"properties": {"Jenis": {"select": {}}}},
+                        json={"properties": missing_props},
                         headers=headers,
                     )
                     if patch_resp.status_code == 200:
-                        category_key = "Jenis"
+                        if not category_key and "Jenis" in missing_props:
+                            category_key = "Jenis"
+                        if not isi_key and "Isi" in missing_props:
+                            isi_key = "Isi"
                 except Exception as patch_err:
-                    logger.warning("Gagal menambahkan properti 'Jenis' ke Notion: %s", str(patch_err))
+                    logger.warning("Gagal menambahkan missing properties ke Notion: %s", str(patch_err))
     except Exception as e:
         logger.warning("Gagal inspeksi skema Notion memory database: %s", str(e))
 
-    return title_key, category_key, date_key
+    return title_key, category_key or "Jenis", date_key or "Tanggal", isi_key or "Isi"
 
 
 async def save_memory_to_notion(
@@ -304,6 +317,9 @@ async def save_memory_to_notion(
     if not content or not content.strip():
         return "Gagal menyimpan memori: Content kosong."
 
+    # Ringkas judul maksimal 100 karakter
+    clean_title = title.strip()[:100]
+
     wib = timezone(timedelta(hours=7))
     now_iso = datetime.now(wib).isoformat()
 
@@ -315,17 +331,19 @@ async def save_memory_to_notion(
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            title_key, category_key, date_key = await _inspect_and_ensure_memory_schema(
+            title_key, category_key, date_key, isi_key = await _inspect_and_ensure_memory_schema(
                 client, database_id, headers
             )
 
             properties_payload: dict[str, Any] = {
-                title_key: {"title": [{"text": {"content": title.strip()}}]}
+                title_key: {"title": [{"text": {"content": clean_title}}]}
             }
             if category_key:
                 properties_payload[category_key] = {"select": {"name": (memory_type or "Aturan").strip()}}
             if date_key:
                 properties_payload[date_key] = {"date": {"start": now_iso}}
+            if isi_key:
+                properties_payload[isi_key] = {"rich_text": [{"type": "text", "text": {"content": content.strip()}}]}
 
             payload = {
                 "parent": {"database_id": database_id},
@@ -343,7 +361,9 @@ async def save_memory_to_notion(
 
             resp = await client.post("https://api.notion.com/v1/pages", json=payload, headers=headers)
             if resp.status_code == 200:
-                await clear_memory_cache(memory_type)
+                # Write-through cache update: langsung refresh KV cache dari Notion dengan TTL 24 jam
+                await read_memory_from_notion(memory_type, force_refresh=True)
+                await read_memory_from_notion(None, force_refresh=True)
                 return "Memori berhasil disimpan."
             else:
                 err_text = resp.text[:200]
@@ -354,16 +374,22 @@ async def save_memory_to_notion(
         return f"Gagal menyimpan memori: {str(e)}"
 
 
-async def read_memory_from_notion(memory_type: Optional[str] = None) -> str:
+async def read_memory_from_notion(
+    memory_type: Optional[str] = None, force_refresh: bool = False
+) -> str:
     """
     Membaca daftar memori dari database Notion.
-    Menggunakan cache Vercel KV selama 10 menit (600s) untuk performa tinggi.
+    Menggunakan Vercel KV sebagai cache utama selama 24 jam (86400s) untuk latensi sangat cepat (<50ms).
+    Notion hanya di-query saat cache miss atau force_refresh=True.
+    Format pengembalian: - {title}: {isi_text}
     """
     cache_key = f"cache:notion_memory:{memory_type or 'all'}"
     from src.kv import get_cache, set_cache
-    cached_val = await get_cache(cache_key)
-    if cached_val is not None:
-        return cached_val
+
+    if not force_refresh:
+        cached_val = await get_cache(cache_key)
+        if cached_val is not None:
+            return cached_val
 
     api_key = os.environ.get("NOTION_API_KEY", "").strip()
     raw_mem_db = os.environ.get("NOTION_MEMORY_DATABASE_ID") or os.environ.get("NOTION_DATABASE_ID", "")
@@ -380,7 +406,7 @@ async def read_memory_from_notion(memory_type: Optional[str] = None) -> str:
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            title_key, category_key, date_key = await _inspect_and_ensure_memory_schema(
+            title_key, category_key, date_key, isi_key = await _inspect_and_ensure_memory_schema(
                 client, database_id, headers
             )
 
@@ -405,13 +431,23 @@ async def read_memory_from_notion(memory_type: Optional[str] = None) -> str:
             for page in data.get("results", []):
                 props = page.get("properties", {})
                 t_prop = props.get(title_key, {}).get("title", []) or props.get("Title", {}).get("title", [])
-                if t_prop:
-                    title_text = t_prop[0].get("text", {}).get("content", "").strip()
-                    if title_text:
-                        lines.append(f"- {title_text}")
+                title_text = t_prop[0].get("text", {}).get("content", "").strip() if t_prop else ""
+
+                isi_prop = props.get(isi_key, {}).get("rich_text", []) if isi_key else []
+                if not isi_prop and "Isi" in props:
+                    isi_prop = props.get("Isi", {}).get("rich_text", [])
+                isi_text = isi_prop[0].get("text", {}).get("content", "").strip() if isi_prop else ""
+
+                if title_text and isi_text:
+                    lines.append(f"- {title_text}: {isi_text}")
+                elif title_text:
+                    lines.append(f"- {title_text}")
+                elif isi_text:
+                    lines.append(f"- {isi_text}")
 
             result_str = "\n".join(lines)
-            await set_cache(cache_key, result_str, ttl_seconds=600)
+            # Simpan ke Vercel KV dengan TTL 24 jam (86400s)
+            await set_cache(cache_key, result_str, ttl_seconds=86400)
             return result_str
     except Exception as e:
         logger.error("Error in read_memory_from_notion: %s", str(e))
