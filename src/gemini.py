@@ -460,6 +460,25 @@ async def chat_with_oline(
                     func_name = fc.name
                     func_args = dict(fc.args) if fc.args else {}
                     result = await _execute_function_call(func_name, func_args, chat_id)
+
+                    # Khusus tool deploy_to_vercel: verifikasi hasil SUKSES vs ERROR
+                    if func_name == "deploy_to_vercel":
+                        is_success = (
+                            isinstance(result, dict)
+                            and result.get("status") == "success"
+                            and result.get("result_code") == "SUKSES"
+                            and bool(result.get("url"))
+                        )
+                        if not is_success and not is_retry:
+                            err_reason = result.get("error") if isinstance(result, dict) else str(result)
+                            await save_pending_task(
+                                chat_id=chat_id,
+                                user_message=user_message,
+                                intent=intent,
+                                user_name=user_name,
+                                error_reason=str(err_reason)[:200],
+                            )
+
                     function_responses.append(
                         types.Part.from_function_response(
                             name=func_name,

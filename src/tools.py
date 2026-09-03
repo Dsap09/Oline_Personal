@@ -1525,15 +1525,24 @@ async def deploy_to_vercel(
 ) -> dict[str, Any]:
     """
     Mendeploy file statis (HTML, CSS, JS) ke Vercel via REST API v13.
-    Gunakan nama project bersih (tanpa timestamp acak) agar Vercel secara otomatis melakukan update/re-deploy ke project eksisting jika sudah ada.
-    Return URL live dan status deployment.
+    Hanya mengembalikan status SUKSES jika Vercel API benar-benar mengembalikan URL .vercel.app yang valid.
     """
     token = os.environ.get("VERCEL_API_TOKEN", "").strip()
     if not token:
-        return {"error": "VERCEL_API_TOKEN belum dikonfigurasi di environment variables."}
+        return {
+            "status": "error",
+            "result_code": "ERROR",
+            "error": "ERROR: Token Vercel (VERCEL_API_TOKEN) belum dikonfigurasi.",
+            "url": None,
+        }
 
     if not project_name or not files:
-        return {"error": "Nama project dan daftar file tidak boleh kosong."}
+        return {
+            "status": "error",
+            "result_code": "ERROR",
+            "error": "ERROR: Nama project dan daftar file tidak boleh kosong.",
+            "url": None,
+        }
 
     clean_name = re.sub(r"[^a-z0-9-]", "", project_name.lower().replace(" ", "-")).strip("-")
     if not clean_name:
@@ -1557,7 +1566,6 @@ async def deploy_to_vercel(
         if "filename" in files or "content" in files:
             files = [files]
         else:
-            # Format {"index.html": "<html>...</html>", "style.css": "..."}
             converted = []
             for fname, fcontent in files.items():
                 converted.append({"filename": fname, "content": fcontent})
@@ -1579,11 +1587,14 @@ async def deploy_to_vercel(
 
     if not file_payload:
         return {
+            "status": "error",
+            "result_code": "ERROR",
             "error": (
-                "Format parameter 'files' tidak valid atau kosong. "
+                "ERROR: Format parameter 'files' tidak valid atau kosong. "
                 "Pastikan mengirimkan daftar file dengan format "
                 "[{\"filename\": \"index.html\", \"content\": \"...\"}]"
-            )
+            ),
+            "url": None,
         }
 
     payload = {
@@ -1611,21 +1622,46 @@ async def deploy_to_vercel(
                 else:
                     live_url = raw_url
 
-                return {
-                    "status": "success",
-                    "project_name": slug,
-                    "url": live_url,
-                    "message": f"Deployment berhasil! Website live di: {live_url}",
-                }
+                # Verifikasi format URL
+                if live_url.startswith("https://") and ".vercel.app" in live_url:
+                    return {
+                        "status": "success",
+                        "result_code": "SUKSES",
+                        "project_name": slug,
+                        "url": live_url,
+                        "message": f"SUKSES: Deployment berhasil! Website live di: {live_url}",
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "result_code": "ERROR",
+                        "error": "ERROR: Respons Vercel API tidak mengandung URL valid.",
+                        "url": None,
+                    }
             else:
                 err_text = resp.text[:250]
                 logger.error("Vercel API error (Status %d): %s", resp.status_code, err_text)
-                return {"error": f"Deploy ke Vercel gagal (Status {resp.status_code}): {err_text}"}
+                return {
+                    "status": "error",
+                    "result_code": "ERROR",
+                    "error": f"ERROR: Vercel API status {resp.status_code} - {err_text}",
+                    "url": None,
+                }
     except httpx.TimeoutException:
-        return {"error": "Deployment ke Vercel mengalami timeout (20 detik). Coba lagi nanti ya."}
+        return {
+            "status": "error",
+            "result_code": "ERROR",
+            "error": "ERROR: Deployment ke Vercel mengalami timeout (20 detik).",
+            "url": None,
+        }
     except Exception as e:
         logger.error("Error in deploy_to_vercel: %s", str(e))
-        return {"error": f"Error saat deploy ke Vercel: {str(e)}"}
+        return {
+            "status": "error",
+            "result_code": "ERROR",
+            "error": f"ERROR: Error saat deploy ke Vercel: {str(e)}",
+            "url": None,
+        }
 
 
 async def list_vercel_deployments() -> dict[str, Any]:
