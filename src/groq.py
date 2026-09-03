@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "gpt-oss-20b")
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
 
 
 async def chat_groq(
@@ -53,7 +53,7 @@ async def chat_groq(
     messages.append({"role": "user", "content": user_message})
 
     candidate_models = [GROQ_MODEL]
-    for alt_model in ["gpt-oss-20b", "llama-3.3-70b-versatile"]:
+    for alt_model in ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.6-27b"]:
         if alt_model not in candidate_models:
             candidate_models.append(alt_model)
     candidate_models = candidate_models[:2]
@@ -161,7 +161,7 @@ async def chat_groq_with_tools(
     openai_tools = convert_tools_to_openai_format(tools)
 
     candidate_models = [GROQ_MODEL]
-    for alt_model in ["gpt-oss-20b", "llama-3.3-70b-versatile"]:
+    for alt_model in ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.6-27b"]:
         if alt_model not in candidate_models:
             candidate_models.append(alt_model)
     candidate_models = candidate_models[:2]
