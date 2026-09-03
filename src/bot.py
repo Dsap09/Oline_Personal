@@ -403,8 +403,15 @@ async def handle_message(
     if intent is not None:
         await update.effective_chat.send_action("typing")
 
-    # Proses lewat Gemini (Fast Path tanpa tools jika intent=None)
-    response = await chat_with_oline(chat_id, user_message, user_name=user_name, intent=intent)
+    # Proses lewat Gemini (Fast Path tanpa tools jika intent=None, paksa Gemini jika intent preview/deploy)
+    use_gemini_only = intent in ("preview", "deploy")
+    response = await chat_with_oline(
+        chat_id,
+        user_message,
+        user_name=user_name,
+        intent=intent,
+        use_gemini_only=use_gemini_only,
+    )
 
     # Kirim respons (split jika terlalu panjang)
     if len(response) > 4096:

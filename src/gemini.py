@@ -384,11 +384,12 @@ async def chat_with_oline(
     user_name: str = "Teman",
     intent: Optional[str] = None,
     is_retry: bool = False,
+    use_gemini_only: bool = False,
 ) -> str:
     """
     Main function untuk chat dengan Oline.
     Mengelola alur: intent tool filter, memori, riwayat, function calling, dan timeout fast/slow path.
-    Parameter is_retry mencegah penyimpanan pending task ganda saat sedang retry.
+    Parameter use_gemini_only=True memaksa penggunaan Gemini (tanpa fallback ke Groq).
     """
     try:
         # Cek apakah pengguna meminta ringkasan percakapan harian
@@ -403,8 +404,8 @@ async def chat_with_oline(
         # 2. Build system prompt
         system_prompt = await _build_system_prompt_async(memory, user_name=user_name)
 
-        # 2.5 Fast Path via Groq API (jika intent None, bukan deploy/preview, dan GROQ_API_KEY diset)
-        if intent is None and intent not in ("deploy", "preview") and os.environ.get("GROQ_API_KEY", "").strip():
+        # 2.5 Fast Path via Groq API (jika use_gemini_only=False, intent None, bukan deploy/preview, dan GROQ_API_KEY diset)
+        if not use_gemini_only and intent is None and intent not in ("deploy", "preview") and os.environ.get("GROQ_API_KEY", "").strip():
             try:
                 from src.groq import chat_groq
 
@@ -516,7 +517,7 @@ async def chat_with_oline(
                 await save_usage(chat_id, total_tokens_session)
 
         except Exception as gemini_err:
-            if intent is not None and intent not in ("deploy", "preview") and os.environ.get("GROQ_API_KEY", "").strip():
+            if not use_gemini_only and intent is not None and intent not in ("deploy", "preview") and os.environ.get("GROQ_API_KEY", "").strip():
                 logger.warning(
                     "Gemini Slow Path gagal (%s). Mencoba fallback ke Groq Slow Path...",
                     str(gemini_err),

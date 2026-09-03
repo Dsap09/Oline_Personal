@@ -1893,24 +1893,30 @@ async def preview_with_codepen(
     title: str, html: str, css: str = "", js: str = ""
 ) -> dict[str, Any]:
     """
-    Mengunggah kode HTML/CSS/JS ke CodePen Prefill / JSFiddle / Vercel Preview service
-    dan mengembalikan URL preview visual yang langsung bisa dibuka.
+    Mengunggah kode HTML/CSS/JS ke CodePen Prefill API
+    dan mengembalikan URL preview CodePen (SUKSES: https://codepen.io/...).
+    JANGAN mendeploy ke Vercel di fungsi ini.
     """
     if not title or not title.strip():
         title = "Landing Page Oline"
     if not html or not html.strip():
-        return {"error": "Kode HTML tidak boleh kosong."}
-
-    # 1. Coba CodePen Prefill API
-    try:
-        payload = {
-            "title": title.strip(),
-            "html": html.strip(),
-            "css": (css or "").strip(),
-            "js": (js or "").strip(),
+        return {
+            "status": "error",
+            "result_code": "ERROR",
+            "error": "ERROR: Kode HTML tidak boleh kosong.",
+            "url": None,
         }
+
+    payload = {
+        "title": title.strip(),
+        "html": html.strip(),
+        "css": (css or "").strip(),
+        "js": (js or "").strip(),
+    }
+
+    try:
         headers = {"User-Agent": "Mozilla/5.0"}
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=12.0) as client:
             resp = await client.post(
                 "https://codepen.io/pen/define",
                 headers=headers,
@@ -1921,66 +1927,33 @@ async def preview_with_codepen(
                 location = resp.headers.get("location") or ""
                 if location.startswith("/"):
                     preview_url = f"https://codepen.io{location}"
-                    return {
-                        "status": "success",
-                        "result_code": "SUKSES",
-                        "url": preview_url,
-                        "message": f"SUKSES: Preview berhasil dibuat! Buka link ini untuk melihat: {preview_url}",
-                    }
                 elif location.startswith("http"):
-                    return {
-                        "status": "success",
-                        "result_code": "SUKSES",
-                        "url": location,
-                        "message": f"SUKSES: Preview berhasil dibuat! Buka link ini untuk melihat: {location}",
-                    }
+                    preview_url = location
+                else:
+                    preview_url = "https://codepen.io/pen/define"
+
+                return {
+                    "status": "success",
+                    "result_code": "SUKSES",
+                    "url": preview_url,
+                    "message": f"SUKSES: Preview CodePen berhasil dibuat! Buka link ini untuk melihat: {preview_url}",
+                }
+            else:
+                logger.warning("CodePen define status %d: %s", resp.status_code, resp.text[:200])
+                return {
+                    "status": "error",
+                    "result_code": "ERROR",
+                    "error": f"ERROR: Gagal membuat preview CodePen (Status {resp.status_code}).",
+                    "url": None,
+                }
     except Exception as cp_err:
         logger.warning("CodePen prefill API failed: %s", str(cp_err))
-
-    # 2. Fallback: Deploy Vercel Instant Preview
-    token = os.environ.get("VERCEL_API_TOKEN", "").strip()
-    if token:
-        try:
-            clean_name = re.sub(r"[^a-z0-9-]", "", title.lower().replace(" ", "-")).strip("-")
-            if not clean_name:
-                clean_name = "oline-preview"
-            proj_name = f"preview-{clean_name[:20]}"
-
-            full_html = html.strip()
-            if css and "<style" not in full_html.lower():
-                full_html += f"\n<style>\n{css.strip()}\n</style>"
-            if js and "<script" not in full_html.lower():
-                full_html += f"\n<script>\n{js.strip()}\n</script>"
-
-            vercel_payload = {
-                "name": proj_name,
-                "files": [{"file": "index.html", "data": full_html}],
-                "projectSettings": {"framework": None},
-            }
-            v_headers = {
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            }
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post("https://api.vercel.com/v13/deployments", json=vercel_payload, headers=v_headers)
-                if resp.status_code in (200, 201):
-                    raw_url = resp.json().get("url", "")
-                    preview_url = "https:" + raw_url if raw_url.startswith("//") else (raw_url if raw_url.startswith("http") else f"https://{raw_url}")
-                    return {
-                        "status": "success",
-                        "result_code": "SUKSES",
-                        "url": preview_url,
-                        "message": f"SUKSES: Link preview berhasil dibuat! Buka di: {preview_url}",
-                    }
-        except Exception as v_err:
-            logger.warning("Vercel preview fallback failed: %s", str(v_err))
-
-    return {
-        "status": "error",
-        "result_code": "ERROR",
-        "error": "ERROR: Gagal membuat link preview. Coba lagi nanti ya.",
-        "url": None,
-    }
+        return {
+            "status": "error",
+            "result_code": "ERROR",
+            "error": f"ERROR: Gagal menghubungi CodePen API: {str(cp_err)}",
+            "url": None,
+        }
 
 
 # --- Lazy Wrapper Functions untuk Notion (mengurangi cold start) ---
