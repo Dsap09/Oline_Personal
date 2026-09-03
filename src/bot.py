@@ -181,10 +181,14 @@ HEAVY_KEYWORDS = {
         "kode python", "kode javascript", "script", "debug", "coding",
         "contoh kode", "print", "buat fungsi", "buat script",
     ],
+    "preview": [
+        "buatkan website", "buatkan landing page", "buat web", "bikin website",
+        "bikin landing page", "preview", "buat halaman", "desain web", "desain website",
+        "buatkan web", "bikin web", "buat landing page",
+    ],
     "deploy": [
-        "deploy", "vercel", "onlinekan", "live", "hosting", "buatkan website",
-        "buatkan landing page", "deploy ke vercel", "publikasikan website",
-        "list landing page", "daftar landing page", "hapus landing page",
+        "deploy sekarang", "deploy ke vercel", "deploy", "onlinekan", "publish",
+        "live", "list landing page", "daftar landing page", "hapus landing page",
         "hapus deployment", "list deployment", "daftar deployment", "delete deployment",
     ],
     "gambar": [

@@ -399,6 +399,35 @@ TOOL_DECLARATIONS = [
         },
     },
     {
+        "name": "preview_with_codepen",
+        "description": (
+            "Mengunggah kode HTML/CSS/JS landing page ke CodePen/Preview Service dan mengembalikan link preview. "
+            "Gunakan saat pengguna meminta dibuatkan landing page, website baru, atau meminta preview tampilan."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Judul landing page atau website, misal: GYM MANIA.",
+                },
+                "html": {
+                    "type": "string",
+                    "description": "Kode HTML lengkap.",
+                },
+                "css": {
+                    "type": "string",
+                    "description": "Kode CSS lengkap.",
+                },
+                "js": {
+                    "type": "string",
+                    "description": "Kode JavaScript (opsional).",
+                },
+            },
+            "required": ["title", "html", "css"],
+        },
+    },
+    {
         "name": "deploy_to_vercel",
         "description": (
             "Mendeploy file statis (HTML, CSS, JS) ke Vercel dan mengembalikan URL live. "
@@ -526,6 +555,7 @@ TOOLS_BY_INTENT = {
     "lokasi": ["get_nearby_places", "search_places_by_city"],
     "coding": ["execute_code"],
     "notion": ["save_note_to_notion", "add_notion_property"],
+    "preview": ["preview_with_codepen"],
     "deploy": [
         "deploy_to_vercel",
         "list_vercel_deployments",
@@ -1859,6 +1889,100 @@ async def search_and_send_image(
     return {"error": f"Gagal mengunduh atau mengirimkan gambar untuk '{query}'. Coba kata kunci lain ya."}
 
 
+async def preview_with_codepen(
+    title: str, html: str, css: str = "", js: str = ""
+) -> dict[str, Any]:
+    """
+    Mengunggah kode HTML/CSS/JS ke CodePen Prefill / JSFiddle / Vercel Preview service
+    dan mengembalikan URL preview visual yang langsung bisa dibuka.
+    """
+    if not title or not title.strip():
+        title = "Landing Page Oline"
+    if not html or not html.strip():
+        return {"error": "Kode HTML tidak boleh kosong."}
+
+    # 1. Coba CodePen Prefill API
+    try:
+        payload = {
+            "title": title.strip(),
+            "html": html.strip(),
+            "css": (css or "").strip(),
+            "js": (js or "").strip(),
+        }
+        headers = {"User-Agent": "Mozilla/5.0"}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                "https://codepen.io/pen/define",
+                headers=headers,
+                data={"data": json.dumps(payload)},
+                follow_redirects=False,
+            )
+            if resp.status_code in (200, 302, 301):
+                location = resp.headers.get("location") or ""
+                if location.startswith("/"):
+                    preview_url = f"https://codepen.io{location}"
+                    return {
+                        "status": "success",
+                        "result_code": "SUKSES",
+                        "url": preview_url,
+                        "message": f"SUKSES: Preview berhasil dibuat! Buka link ini untuk melihat: {preview_url}",
+                    }
+                elif location.startswith("http"):
+                    return {
+                        "status": "success",
+                        "result_code": "SUKSES",
+                        "url": location,
+                        "message": f"SUKSES: Preview berhasil dibuat! Buka link ini untuk melihat: {location}",
+                    }
+    except Exception as cp_err:
+        logger.warning("CodePen prefill API failed: %s", str(cp_err))
+
+    # 2. Fallback: Deploy Vercel Instant Preview
+    token = os.environ.get("VERCEL_API_TOKEN", "").strip()
+    if token:
+        try:
+            clean_name = re.sub(r"[^a-z0-9-]", "", title.lower().replace(" ", "-")).strip("-")
+            if not clean_name:
+                clean_name = "oline-preview"
+            proj_name = f"preview-{clean_name[:20]}"
+
+            full_html = html.strip()
+            if css and "<style" not in full_html.lower():
+                full_html += f"\n<style>\n{css.strip()}\n</style>"
+            if js and "<script" not in full_html.lower():
+                full_html += f"\n<script>\n{js.strip()}\n</script>"
+
+            vercel_payload = {
+                "name": proj_name,
+                "files": [{"file": "index.html", "data": full_html}],
+                "projectSettings": {"framework": None},
+            }
+            v_headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            }
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post("https://api.vercel.com/v13/deployments", json=vercel_payload, headers=v_headers)
+                if resp.status_code in (200, 201):
+                    raw_url = resp.json().get("url", "")
+                    preview_url = "https:" + raw_url if raw_url.startswith("//") else (raw_url if raw_url.startswith("http") else f"https://{raw_url}")
+                    return {
+                        "status": "success",
+                        "result_code": "SUKSES",
+                        "url": preview_url,
+                        "message": f"SUKSES: Link preview berhasil dibuat! Buka di: {preview_url}",
+                    }
+        except Exception as v_err:
+            logger.warning("Vercel preview fallback failed: %s", str(v_err))
+
+    return {
+        "status": "error",
+        "result_code": "ERROR",
+        "error": "ERROR: Gagal membuat link preview. Coba lagi nanti ya.",
+        "url": None,
+    }
+
+
 # --- Lazy Wrapper Functions untuk Notion (mengurangi cold start) ---
 
 async def _lazy_save_note_to_notion(**kwargs):
@@ -1895,6 +2019,7 @@ TOOL_EXECUTORS = {
     "execute_code": execute_code,
     "save_note_to_notion": _lazy_save_note_to_notion,
     "add_notion_property": _lazy_add_notion_property,
+    "preview_with_codepen": preview_with_codepen,
     "deploy_to_vercel": deploy_to_vercel,
     "list_vercel_deployments": list_vercel_deployments,
     "delete_vercel_deployment": delete_vercel_deployment,
