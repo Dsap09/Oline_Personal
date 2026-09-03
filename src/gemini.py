@@ -403,8 +403,8 @@ async def chat_with_oline(
         # 2. Build system prompt
         system_prompt = await _build_system_prompt_async(memory, user_name=user_name)
 
-        # 2.5 Fast Path via Groq API (jika intent None, bukan deploy, dan GROQ_API_KEY diset)
-        if intent is None and intent != "deploy" and os.environ.get("GROQ_API_KEY", "").strip():
+        # 2.5 Fast Path via Groq API (jika intent None, bukan deploy/preview, dan GROQ_API_KEY diset)
+        if intent is None and intent not in ("deploy", "preview") and os.environ.get("GROQ_API_KEY", "").strip():
             try:
                 from src.groq import chat_groq
 
@@ -516,7 +516,7 @@ async def chat_with_oline(
                 await save_usage(chat_id, total_tokens_session)
 
         except Exception as gemini_err:
-            if intent is not None and intent != "deploy" and os.environ.get("GROQ_API_KEY", "").strip():
+            if intent is not None and intent not in ("deploy", "preview") and os.environ.get("GROQ_API_KEY", "").strip():
                 logger.warning(
                     "Gemini Slow Path gagal (%s). Mencoba fallback ke Groq Slow Path...",
                     str(gemini_err),
