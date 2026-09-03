@@ -39,6 +39,21 @@ def extract_database_id(raw_id: str) -> str:
     return raw_clean
 
 
+def _get_notion_memory_db_id() -> str:
+    """
+    Mengambil ID database memori Notion.
+    Mendahulukan NOTION_MEMORY_DATABASE_ID, jika kosong fallback ke NOTION_DATABASE_ID.
+    """
+    raw_mem = (os.environ.get("NOTION_MEMORY_DATABASE_ID") or "").strip().strip('"').strip("'")
+    if not raw_mem:
+        raw_mem = (os.environ.get("NOTION_DATABASE_ID") or "").strip().strip('"').strip("'")
+    db_id = extract_database_id(raw_mem)
+    cleaned = db_id.replace("-", "")
+    if len(cleaned) == 32:
+        return cleaned
+    return db_id
+
+
 async def save_note_to_notion(
     title: str, content: str, category: str = "Umum"
 ) -> dict[str, Any]:
@@ -304,8 +319,7 @@ async def save_memory_to_notion(
     Gunakan NOTION_MEMORY_DATABASE_ID (fallback ke NOTION_DATABASE_ID jika belum diset).
     """
     api_key = os.environ.get("NOTION_API_KEY", "").strip()
-    raw_mem_db = os.environ.get("NOTION_MEMORY_DATABASE_ID") or os.environ.get("NOTION_DATABASE_ID", "")
-    database_id = extract_database_id(raw_mem_db.strip())
+    database_id = _get_notion_memory_db_id()
 
     if not api_key:
         return "Gagal menyimpan memori: NOTION_API_KEY belum dikonfigurasi."
@@ -365,6 +379,9 @@ async def save_memory_to_notion(
                 await read_memory_from_notion(memory_type, force_refresh=True)
                 await read_memory_from_notion(None, force_refresh=True)
                 return "Memori berhasil disimpan."
+            elif resp.status_code == 404:
+                logger.warning("Notion memory database 404 Not Found (object_not_found). Check integration permissions.")
+                return "Gagal menyimpan memori: Database Notion tidak ditemukan (404). Pastikan database sudah dibagikan ke Integrasi Notion."
             else:
                 err_text = resp.text[:200]
                 logger.error("Notion save_memory error (Status %d): %s", resp.status_code, err_text)
@@ -392,8 +409,7 @@ async def read_memory_from_notion(
             return cached_val
 
     api_key = os.environ.get("NOTION_API_KEY", "").strip()
-    raw_mem_db = os.environ.get("NOTION_MEMORY_DATABASE_ID") or os.environ.get("NOTION_DATABASE_ID", "")
-    database_id = extract_database_id(raw_mem_db.strip())
+    database_id = _get_notion_memory_db_id()
 
     if not api_key or not database_id:
         return ""

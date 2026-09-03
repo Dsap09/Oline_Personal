@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 # Konfigurasi Gemini API
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-lite-latest")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
 
 
 def _get_client() -> genai.Client:
@@ -195,16 +195,13 @@ Format output: langsung tuliskan ringkasan memori tanpa prefix atau label."""
 
 # Model kandidat untuk rotasi & fallback otomatis
 DEFAULT_MODEL_CANDIDATES = [
-    "gemini-flash-lite-latest",
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-flash-latest",
-    "gemini-2.0-flash-lite",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
 ]
 
 
 def _get_model_candidates() -> list[str]:
-    """Mengembalikan daftar model kandidat, memprioritaskan GEMINI_MODEL dari env jika ada."""
+    """Mengembalikan maksimal 2 model kandidat untuk efisiensi waktu."""
     configured = os.environ.get("GEMINI_MODEL", "").strip()
     candidates = list(DEFAULT_MODEL_CANDIDATES)
     if configured and configured in candidates:
@@ -212,7 +209,7 @@ def _get_model_candidates() -> list[str]:
         candidates.insert(0, configured)
     elif configured:
         candidates.insert(0, configured)
-    return candidates
+    return candidates[:2]
 
 
 async def _generate_content_with_fallback(
@@ -406,8 +403,8 @@ async def chat_with_oline(
         # 2. Build system prompt
         system_prompt = await _build_system_prompt_async(memory, user_name=user_name)
 
-        # 2.5 Fast Path via Groq API (jika intent None dan GROQ_API_KEY diset)
-        if intent is None and os.environ.get("GROQ_API_KEY", "").strip():
+        # 2.5 Fast Path via Groq API (jika intent None, bukan deploy, dan GROQ_API_KEY diset)
+        if intent is None and intent != "deploy" and os.environ.get("GROQ_API_KEY", "").strip():
             try:
                 from src.groq import chat_groq
 
@@ -500,7 +497,7 @@ async def chat_with_oline(
                 await save_usage(chat_id, total_tokens_session)
 
         except Exception as gemini_err:
-            if intent is not None and os.environ.get("GROQ_API_KEY", "").strip():
+            if intent is not None and intent != "deploy" and os.environ.get("GROQ_API_KEY", "").strip():
                 logger.warning(
                     "Gemini Slow Path gagal (%s). Mencoba fallback ke Groq Slow Path...",
                     str(gemini_err),

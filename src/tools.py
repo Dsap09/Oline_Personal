@@ -402,7 +402,8 @@ TOOL_DECLARATIONS = [
         "name": "deploy_to_vercel",
         "description": (
             "Mendeploy file statis (HTML, CSS, JS) ke Vercel dan mengembalikan URL live. "
-            "Gunakan saat pengguna meminta mendeploy website, landing page, atau meng-online-kan kode."
+            "Gunakan saat pengguna meminta mendeploy website, landing page, atau meng-online-kan kode. "
+            "Kirimkan array object pada parameter `files`: [{'filename': 'index.html', 'content': '...'}]"
         ),
         "parameters": {
             "type": "object",
@@ -1540,12 +1541,50 @@ async def deploy_to_vercel(
 
     slug = clean_name
 
+    # Defensive parsing untuk parameter `files`
+    if isinstance(files, str):
+        try:
+            files = json.loads(files)
+        except Exception:
+            try:
+                import ast
+                files = ast.literal_eval(files)
+            except Exception:
+                files = []
+
+    # Jika `files` berupa dict:
+    if isinstance(files, dict):
+        if "filename" in files or "content" in files:
+            files = [files]
+        else:
+            # Format {"index.html": "<html>...</html>", "style.css": "..."}
+            converted = []
+            for fname, fcontent in files.items():
+                converted.append({"filename": fname, "content": fcontent})
+            files = converted
+
+    if not isinstance(files, list):
+        files = []
+
     file_payload = []
     for f in files:
-        file_payload.append({
-            "file": f.get("filename") or f.get("file", "index.html"),
-            "data": f.get("content") or f.get("data", ""),
-        })
+        if isinstance(f, dict):
+            fname = f.get("filename") or f.get("file") or f.get("name")
+            fdata = f.get("content") or f.get("data") or f.get("code") or ""
+            if fname:
+                file_payload.append({
+                    "file": str(fname).strip(),
+                    "data": str(fdata),
+                })
+
+    if not file_payload:
+        return {
+            "error": (
+                "Format parameter 'files' tidak valid atau kosong. "
+                "Pastikan mengirimkan daftar file dengan format "
+                "[{\"filename\": \"index.html\", \"content\": \"...\"}]"
+            )
+        }
 
     payload = {
         "name": slug,
