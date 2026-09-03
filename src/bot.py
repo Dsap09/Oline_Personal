@@ -16,7 +16,7 @@ from telegram.ext import (
     filters,
 )
 
-from src.gemini import chat_with_oline
+from src.gemini import chat_with_oline, retry_pending_task
 
 from src.kv import check_rate_limit, get_history, save_journal
 
@@ -247,6 +247,20 @@ RULE_KEYWORDS = [
     "panggil aku", "panggil saya", "ingat ya", "catat ya",
 ]
 
+RETRY_KEYWORDS = [
+    "apakah sudah", "udah belum", "udah bisa", "gimana tadi",
+    "sudah bisa", "coba lagi", "retry", "yang tadi",
+    "udah jadi", "gimana yang tadi", "masih error",
+]
+
+
+def is_retry_request(text: str) -> bool:
+    """Mendeteksi apakah pesan pengguna menanyakan status pending task / minta retry."""
+    if not text:
+        return False
+    text_lower = text.lower().strip()
+    return any(kw in text_lower for kw in RETRY_KEYWORDS)
+
 
 def generate_memory_title(rule_text: str) -> str:
     """
@@ -319,6 +333,55 @@ async def handle_message(
     user_name = "Teman"
     if update.effective_user and update.effective_user.first_name:
         user_name = update.effective_user.first_name
+
+    # --- Pending Task: Cek apakah pengguna minta retry eksplisit ---
+    if is_retry_request(user_message):
+        try:
+            retry_result = await retry_pending_task(chat_id)
+            if retry_result:
+                # Pending task berhasil di-retry!
+                prefix = "oke, perintah kamu yang tadi udah berhasil nih! 🎉\n\n"
+                response = prefix + retry_result
+                if len(response) > 4096:
+                    for i in range(0, len(response), 4096):
+                        await update.effective_chat.send_message(response[i : i + 4096])
+                else:
+                    await update.effective_chat.send_message(response)
+                return
+            else:
+                # Tidak ada pending task atau masih gagal
+                from src.kv import get_pending_task
+                task = await get_pending_task(chat_id)
+                if task:
+                    await update.effective_chat.send_message(
+                        f"masih belum bisa nih, bestie 😢 "
+                        f"perintah kamu \"{task.get('message', '')[:50]}\" masih Oline simpan kok. "
+                        f"nanti dicoba lagi ya~"
+                    )
+                    return
+                # Tidak ada pending task, lanjut proses pesan biasa
+        except Exception as retry_err:
+            logger.warning("Error during explicit retry: %s", str(retry_err))
+
+    # --- Pending Task: Auto-retry di background setiap pesan masuk ---
+    try:
+        from src.kv import get_pending_task as _get_pt
+        pending = await _get_pt(chat_id)
+        if pending:
+            retry_result = await retry_pending_task(chat_id)
+            if retry_result:
+                # Kirim notifikasi bahwa pending task berhasil
+                notify = (
+                    "btw, perintah kamu yang tadi berhasil nih! 🎉\n\n"
+                    + retry_result
+                )
+                if len(notify) > 4096:
+                    for i in range(0, len(notify), 4096):
+                        await update.effective_chat.send_message(notify[i : i + 4096])
+                else:
+                    await update.effective_chat.send_message(notify)
+    except Exception as auto_retry_err:
+        logger.warning("Auto-retry pending task error: %s", str(auto_retry_err))
 
     # Deteksi jika pesan berisi aturan/preferensi baru untuk disimpan ke Notion
     if is_rule_message(user_message):

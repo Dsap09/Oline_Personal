@@ -4,11 +4,19 @@
     {
       "src": "api/index.py",
       "use": "@vercel/python"
+    },
+    {
+      "src": "api/keepalive.py",
+      "use": "@vercel/python"
     }
   ],
   "routes": [
     {
-      "src": "/(.*)",
+      "src": "^/api/keepalive/?$",
+      "dest": "/api/keepalive.py"
+    },
+    {
+      "src": "^/(.*)$",
       "dest": "/api/index.py"
     }
   ]

@@ -14,7 +14,17 @@ from typing import Any, Optional
 from google import genai
 from google.genai import types
 
-from src.kv import get_history, get_memory, save_history, save_memory, save_usage
+from src.kv import (
+    clear_pending_task,
+    get_history,
+    get_memory,
+    get_pending_task,
+    save_history,
+    save_memory,
+    save_pending_task,
+    save_usage,
+    update_pending_task_retry_count,
+)
 from src.personas import (
     MEMORY_INJECTION_TEMPLATE,
     OLINE_SYSTEM_PROMPT,
@@ -315,15 +325,73 @@ Tuliskan poin-poin utama yang dibicarakan atau diputuskan."""
         return f"Gagal membuat ringkasan harian: {str(e)}"
 
 
+async def retry_pending_task(chat_id: int) -> Optional[str]:
+    """
+    Mengecek dan mencoba ulang pending task yang gagal sebelumnya.
+    Returns respons hasil retry jika berhasil, None jika tidak ada pending task atau masih gagal.
+    """
+    task = await get_pending_task(chat_id)
+    if not task:
+        return None
+
+    message = task.get("message", "")
+    intent = task.get("intent")
+    user_name = task.get("user_name", "Teman")
+    retry_count = task.get("retry_count", 0)
+
+    if not message:
+        await clear_pending_task(chat_id)
+        return None
+
+    logger.info(
+        "Retrying pending task for chat_id %s (attempt %d): %s",
+        chat_id, retry_count + 1, message[:80],
+    )
+
+    try:
+        # Panggil chat_with_oline dengan is_retry=True untuk mencegah infinite loop
+        result = await chat_with_oline(
+            chat_id=chat_id,
+            user_message=message,
+            user_name=user_name,
+            intent=intent,
+            is_retry=True,
+        )
+
+        # Cek apakah hasilnya bukan pesan error
+        error_indicators = [
+            "lagi error", "lagi ngelag", "coba lagi nanti",
+            "trafik server", "error dua-duanya",
+            "perintah kamu udah Oline simpan",
+        ]
+        is_error = any(indicator in result for indicator in error_indicators)
+
+        if not is_error:
+            # Berhasil! Hapus pending task
+            await clear_pending_task(chat_id)
+            return result
+        else:
+            # Masih gagal, increment retry count
+            await update_pending_task_retry_count(chat_id, task)
+            return None
+
+    except Exception as e:
+        logger.warning("Retry pending task failed for chat_id %s: %s", chat_id, str(e))
+        await update_pending_task_retry_count(chat_id, task)
+        return None
+
+
 async def chat_with_oline(
     chat_id: int,
     user_message: str,
     user_name: str = "Teman",
     intent: Optional[str] = None,
+    is_retry: bool = False,
 ) -> str:
     """
     Main function untuk chat dengan Oline.
     Mengelola alur: intent tool filter, memori, riwayat, function calling, dan timeout fast/slow path.
+    Parameter is_retry mencegah penyimpanan pending task ganda saat sedang retry.
     """
     try:
         # Cek apakah pengguna meminta ringkasan percakapan harian
@@ -456,7 +524,20 @@ async def chat_with_oline(
                         raise ValueError("Groq returned empty response")
                 except Exception as groq_err:
                     logger.error("Groq Slow Path fallback juga gagal: %s", str(groq_err))
-                    return "aduh, Oline lagi error dua-duanya nih. Coba lagi nanti ya, bestie~ 😢"
+                    # Simpan pending task agar bisa dicoba ulang nanti
+                    if not is_retry:
+                        await save_pending_task(
+                            chat_id=chat_id,
+                            user_message=user_message,
+                            intent=intent,
+                            user_name=user_name,
+                            error_reason=f"Gemini: {str(gemini_err)[:100]} | Groq: {str(groq_err)[:100]}",
+                        )
+                    return (
+                        "aduh, Oline lagi error dua-duanya nih 😢 "
+                        "tapi tenang, perintah kamu udah Oline simpan — "
+                        "nanti otomatis dicoba lagi ya, bestie~"
+                    )
             else:
                 raise gemini_err
 
@@ -471,12 +552,31 @@ async def chat_with_oline(
     except Exception as e:
         err_msg = str(e)
         logger.error("Error in chat_with_oline: %s", err_msg, exc_info=True)
+
+        # Simpan pending task agar perintah tidak hilang (kecuali sedang retry)
+        if not is_retry:
+            await save_pending_task(
+                chat_id=chat_id,
+                user_message=user_message,
+                intent=intent,
+                user_name=user_name,
+                error_reason=err_msg[:200],
+            )
+
         if (
             "429" in err_msg
             or "resourceexhausted" in err_msg.lower()
             or "quota exceeded" in err_msg.lower()
             or "rate limit" in err_msg.lower()
         ):
-            return "aduh, trafik server AI lagi penuh banget nih 😅 coba kirim pesan lagi sebentar ya!"
-        return "aduh maaf, aku lagi agak ngelag nih 😅 coba lagi nanti ya!"
+            return (
+                "aduh, trafik server AI lagi penuh banget nih 😅 "
+                "tapi tenang, perintah kamu udah Oline simpan — "
+                "nanti otomatis dicoba lagi ya!"
+            )
+        return (
+            "aduh maaf, aku lagi agak ngelag nih 😅 "
+            "tapi tenang, perintah kamu udah Oline simpan — "
+            "nanti otomatis dicoba lagi ya!"
+        )
 

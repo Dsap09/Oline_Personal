@@ -25,6 +25,7 @@ GROQ_USAGE_PREFIX = "groq_usage"
 TTS_PREFIX = "tts_usage"
 PENDING_FILE_PREFIX = "pending_file"
 LOCATION_PREFIX = "location"
+PENDING_TASK_PREFIX = "pending_task"
 
 
 
@@ -488,5 +489,80 @@ async def log_error(error_message: str) -> bool:
     return result is not None
 
 
+# --- Pending Task Functions (Auto-Retry on Failure) ---
+
+async def save_pending_task(
+    chat_id: int,
+    user_message: str,
+    intent: Optional[str] = None,
+    user_name: str = "Teman",
+    error_reason: str = "",
+) -> bool:
+    """
+    Menyimpan perintah yang gagal dieksekusi ke KV untuk dicoba ulang nanti.
+    Hanya menyimpan 1 pending task per user (overwrite yang lama).
+    TTL 1 jam (3600 detik) — perintah yang terlalu lama tidak relevan lagi.
+    """
+    key = f"{PENDING_TASK_PREFIX}:{chat_id}"
+    # Batasi panjang error_reason agar tidak membengkakkan KV
+    safe_error = str(error_reason)[:200] if error_reason else ""
+    payload = json.dumps({
+        "message": user_message,
+        "intent": intent,
+        "user_name": user_name,
+        "error_reason": safe_error,
+        "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        "retry_count": 0,
+    }, ensure_ascii=False)
+    result = await _kv_request(["SET", key, payload, "EX", "3600"])
+    if result is not None:
+        logger.info("Pending task saved for chat_id %s: %s", chat_id, user_message[:80])
+    return result is not None
 
 
+async def get_pending_task(chat_id: int) -> Optional[dict]:
+    """
+    Mengambil pending task (perintah gagal) dari KV.
+    Returns dict jika ada, None jika tidak ada / expired.
+    """
+    key = f"{PENDING_TASK_PREFIX}:{chat_id}"
+    result = await _kv_request(["GET", key])
+    if result and result.get("result"):
+        try:
+            data = result["result"]
+            if isinstance(data, str):
+                data = json.loads(data)
+            if isinstance(data, dict) and "message" in data:
+                return data
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning("Error parsing pending task from KV: %s", str(e))
+    return None
+
+
+async def clear_pending_task(chat_id: int) -> bool:
+    """
+    Menghapus pending task setelah berhasil dieksekusi ulang atau expired.
+    """
+    key = f"{PENDING_TASK_PREFIX}:{chat_id}"
+    result = await _kv_request(["DEL", key])
+    if result is not None:
+        logger.info("Pending task cleared for chat_id %s", chat_id)
+    return result is not None
+
+
+async def update_pending_task_retry_count(chat_id: int, task: dict) -> bool:
+    """
+    Increment retry_count pada pending task yang ada.
+    Jika retry_count >= 3, hapus pending task (dianggap expired).
+    """
+    current_count = task.get("retry_count", 0)
+    if current_count >= 2:  # Akan menjadi retry ke-3, hapus saja
+        await clear_pending_task(chat_id)
+        logger.info("Pending task expired after 3 retries for chat_id %s", chat_id)
+        return False
+
+    key = f"{PENDING_TASK_PREFIX}:{chat_id}"
+    task["retry_count"] = current_count + 1
+    payload = json.dumps(task, ensure_ascii=False)
+    result = await _kv_request(["SET", key, payload, "EX", "3600"])
+    return result is not None

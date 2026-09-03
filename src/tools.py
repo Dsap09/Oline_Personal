@@ -13,7 +13,6 @@ from datetime import datetime
 from typing import Any, Optional
 
 import httpx
-import requests
 
 from src.kv import (
     get_journal_entries,
@@ -26,14 +25,9 @@ from src.kv import (
     save_user_location,
 )
 
-
-from src.notion import add_notion_property, save_note_to_notion
+# NOTE: src.notion dan src.voice di-lazy-load di dalam fungsi masing-masing
+# untuk mengurangi cold start time pada Vercel serverless.
 from src.utils import format_date_indonesian, parse_relative_date
-from src.voice import (
-    generate_elevenlabs_tts,
-    send_chat_action_record_voice,
-    send_voice_note_to_telegram,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -899,6 +893,13 @@ async def execute_send_voice_message(chat_id: int, text: str) -> dict[str, Any]:
                 "Tunggu bulan depan ya, atau kita ngobrol teks aja dulu~ 😘"
             ),
         }
+
+    # Lazy import voice module (mengurangi cold start)
+    from src.voice import (
+        generate_elevenlabs_tts,
+        send_chat_action_record_voice,
+        send_voice_note_to_telegram,
+    )
 
     # 2. Kirim chat action "record_voice" agar Telegram menampilkan indikator merekam
     await send_chat_action_record_voice(chat_id)
@@ -1783,6 +1784,20 @@ async def search_and_send_image(
     return {"error": f"Gagal mengunduh atau mengirimkan gambar untuk '{query}'. Coba kata kunci lain ya."}
 
 
+# --- Lazy Wrapper Functions untuk Notion (mengurangi cold start) ---
+
+async def _lazy_save_note_to_notion(**kwargs):
+    """Lazy wrapper: import src.notion hanya saat tool ini dipanggil."""
+    from src.notion import save_note_to_notion
+    return await save_note_to_notion(**kwargs)
+
+
+async def _lazy_add_notion_property(**kwargs):
+    """Lazy wrapper: import src.notion hanya saat tool ini dipanggil."""
+    from src.notion import add_notion_property
+    return await add_notion_property(**kwargs)
+
+
 # Map nama tool ke executor function
 TOOL_EXECUTORS = {
     "get_movie_recommendation": get_movie_recommendation,
@@ -1803,8 +1818,8 @@ TOOL_EXECUTORS = {
     "get_nearby_places": get_nearby_places,
     "search_places_by_city": search_places_by_city,
     "execute_code": execute_code,
-    "save_note_to_notion": save_note_to_notion,
-    "add_notion_property": add_notion_property,
+    "save_note_to_notion": _lazy_save_note_to_notion,
+    "add_notion_property": _lazy_add_notion_property,
     "deploy_to_vercel": deploy_to_vercel,
     "list_vercel_deployments": list_vercel_deployments,
     "delete_vercel_deployment": delete_vercel_deployment,
