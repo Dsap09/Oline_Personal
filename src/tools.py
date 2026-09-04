@@ -40,6 +40,7 @@ TMDB_BASE_URL = "https://api.themoviedb.org/3"
 ITUNES_BASE_URL = "https://itunes.apple.com"
 OPENWEATHER_BASE_URL = "https://api.openweathermap.org/data/2.5"
 PISTON_EXECUTE_URL = "https://emkc.org/api/v2/piston/execute"
+MOONDREAM_API_URL = os.environ.get("MOONDREAM_API_URL", "vikhyatk/moondream2")
 
 
 # ============================================================
@@ -535,6 +536,62 @@ TOOL_DECLARATIONS = [
             "required": ["deployment_id"],
         },
     },
+    {
+        "name": "simpan_aktivitas_neo4j",
+        "description": (
+            "Menyimpan aktivitas pengguna ke database graph Neo4j. "
+            "Gunakan saat pengguna meminta mencatat atau menyimpan aktivitas tertentu."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "aksi": {
+                    "type": "string",
+                    "description": "Jenis aksi yang dilakukan (misal: 'minta landing page', 'deploy', 'simpan catatan').",
+                },
+                "objek": {
+                    "type": "string",
+                    "description": "Objek atau target aksi (misal: 'GYM MANIA', 'catatan meeting').",
+                },
+            },
+            "required": ["aksi", "objek"],
+        },
+    },
+    {
+        "name": "cari_aktivitas_neo4j",
+        "description": (
+            "Mencari dan menampilkan riwayat aktivitas terakhir pengguna dari database graph Neo4j. "
+            "Gunakan saat pengguna meminta melihat aktivitas terakhir, log aktivitas, atau riwayat aksi."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Jumlah maksimal aktivitas yang ditampilkan. Default 10.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "search_design_reference",
+        "description": (
+            "Mencari website referensi di internet dan menganalisis desainnya "
+            "(struktur, warna, font, copywriting). Gunakan saat pengguna meminta "
+            "landing page dengan referensi desain dari website tertentu atau website sejenis."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Kata kunci untuk mencari website referensi, misal: 'website gym terkenal', 'kedai kopi modern', 'situs restoran elegan'.",
+                }
+            },
+            "required": ["query"],
+        },
+    },
 ]
 
 TOOLS_BY_INTENT = {
@@ -555,13 +612,15 @@ TOOLS_BY_INTENT = {
     "lokasi": ["get_nearby_places", "search_places_by_city"],
     "coding": ["execute_code"],
     "notion": ["save_note_to_notion", "add_notion_property"],
-    "preview": ["preview_with_codepen"],
+    "preview": ["preview_with_codepen", "search_design_reference"],
     "deploy": [
         "deploy_to_vercel",
         "list_vercel_deployments",
         "delete_vercel_deployment",
     ],
     "gambar": ["search_and_send_image"],
+    "neo4j": ["simpan_aktivitas_neo4j", "cari_aktivitas_neo4j"],
+    "design_reference": ["search_design_reference"],
 }
 
 
@@ -1966,8 +2025,210 @@ async def _lazy_save_note_to_notion(**kwargs):
 
 async def _lazy_add_notion_property(**kwargs):
     """Lazy wrapper: import src.notion hanya saat tool ini dipanggil."""
+
     from src.notion import add_notion_property
     return await add_notion_property(**kwargs)
+
+
+# --- Lazy Wrapper Functions untuk Neo4j (mengurangi cold start) ---
+
+async def _lazy_simpan_aktivitas_neo4j(chat_id: int = 0, **kwargs):
+    """Lazy wrapper: import src.neo4j_client hanya saat tool ini dipanggil."""
+    from src.neo4j_client import simpan_aktivitas
+    aksi = kwargs.get("aksi", "")
+    objek = kwargs.get("objek", "")
+    if not aksi or not objek:
+        return {"status": "error", "message": "Parameter 'aksi' dan 'objek' wajib diisi."}
+    success = await simpan_aktivitas(str(chat_id), aksi, objek)
+    if success:
+        return {"status": "success", "message": f"Aktivitas '{aksi}' pada '{objek}' berhasil disimpan ke graph."}
+    return {"status": "error", "message": "Gagal menyimpan aktivitas. Neo4j mungkin belum dikonfigurasi."}
+
+
+async def _lazy_cari_aktivitas_neo4j(chat_id: int = 0, **kwargs):
+    """Lazy wrapper: import src.neo4j_client hanya saat tool ini dipanggil."""
+    from src.neo4j_client import cari_aktivitas
+    limit = kwargs.get("limit", 10)
+    if not isinstance(limit, int) or limit < 1:
+        limit = 10
+    aktivitas_list = await cari_aktivitas(str(chat_id), limit=limit)
+    if aktivitas_list:
+        return {"status": "success", "aktivitas": aktivitas_list, "total": len(aktivitas_list)}
+    return {"status": "success", "aktivitas": [], "total": 0, "message": "Belum ada aktivitas yang tercatat."}
+
+
+def extract_design_info(html: str) -> dict:
+    """
+    Ekstraksi informasi penting desain dari HTML website (font, warna hex, struktur, hero text).
+    """
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "lxml")
+    except Exception:
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, "html.parser")
+        except Exception:
+            return {"title": "", "fonts": [], "colors": [], "structure": [], "hero_text": ""}
+
+    info = {
+        "title": soup.title.string.strip() if (soup.title and soup.title.string) else "",
+        "fonts": [],
+        "colors": [],
+        "structure": [],
+        "hero_text": "",
+    }
+
+    # Fonts
+    for css in soup.find_all(["link", "style"]):
+        text = css.get("href", "") if css.name == "link" else (css.string or "")
+        fonts = re.findall(r'font-family:\s*([^;}]+)', text)
+        info["fonts"].extend([f.strip("'\" ") for f in fonts])
+    info["fonts"] = list(dict.fromkeys(info["fonts"]))[:5]
+
+    # Colors (Hex codes)
+    hex_colors = re.findall(r'#[0-9a-fA-F]{6}', str(soup))
+    info["colors"] = list(dict.fromkeys(hex_colors))[:10]
+
+    # Structure
+    for tag in ["header", "section", "footer", "nav", "main", "div"]:
+        for elem in soup.find_all(tag, class_=True):
+            classes = elem.get("class")
+            if isinstance(classes, list):
+                if any(c.lower() in ["hero", "navbar", "pricing", "gallery", "about", "contact", "footer", "features", "cta", "header"] for c in classes):
+                    info["structure"].append(f"{tag}.{'.'.join(classes)}")
+    info["structure"] = list(dict.fromkeys(info["structure"]))[:10]
+
+    # Hero text
+    hero = soup.find("h1")
+    if hero:
+        info["hero_text"] = hero.get_text(strip=True)[:150]
+
+    return info
+
+
+async def search_design_reference(query: str) -> dict[str, Any]:
+    """
+    Mencari website referensi di internet via DDGS dan menginspeksi desainnya (font, warna, struktur, hero text).
+    """
+    def _search_and_scrape():
+        try:
+            from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
+
+        search_query = query if "website" in query.lower() else f"{query} website"
+        try:
+            with DDGS() as ddgs:
+                results = list(ddgs.text(search_query, max_results=5))
+        except Exception as e:
+            logger.error("DDGS search error for design reference: %s", str(e))
+            return {"error": f"Gagal mencari kandidat website: {str(e)}"}
+
+        if not results:
+            return {"error": "Tidak ada kandidat website ditemukan."}
+
+        summaries = []
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+
+        for r in results:
+            url = r.get("href")
+            if not url or not url.startswith("http"):
+                continue
+
+            try:
+                with httpx.Client(timeout=8.0, follow_redirects=True, headers=headers) as client:
+                    resp = client.get(url)
+                    if resp.status_code != 200:
+                        continue
+
+                    info = extract_design_info(resp.text)
+                    font_list = ", ".join(info["fonts"]) if info["fonts"] else "tidak terdeteksi"
+                    color_list = ", ".join(info["colors"]) if info["colors"] else "tidak terdeteksi"
+                    structure_list = ", ".join(info["structure"]) if info["structure"] else "tidak terdeteksi"
+
+                    summaries.append(
+                        f"Website: {url}\n"
+                        f"Judul: {info['title']}\n"
+                        f"Font: {font_list}\n"
+                        f"Warna dominan: {color_list}\n"
+                        f"Struktur utama: {structure_list}\n"
+                        f"Hero text: {info['hero_text']}\n"
+                        "---"
+                    )
+                    if len(summaries) >= 3:
+                        break
+            except Exception as e:
+                logger.warning("Scraping %s failed: %s", url, str(e))
+                continue
+
+        if not summaries:
+            return {"error": "Gagal mengambil dan mengekstrak data dari kandidat website."}
+
+        return {"status": "success", "results": "\n\n".join(summaries)}
+
+async def analyze_image(
+    image_bytes: bytes, question: str = "Deskripsikan gambar ini"
+) -> str:
+    """
+    Menganalisis gambar dari bytearray/bytes menggunakan Moondream VLM via gradio_client.
+    """
+    if not image_bytes:
+        return "Gagal menganalisis gambar: data gambar kosong."
+
+    def _predict():
+        import tempfile
+        try:
+            from gradio_client import Client, handle_file
+        except ImportError as imp_err:
+            logger.error("gradio_client belum terinstall: %s", str(imp_err))
+            return "Gagal menganalisis gambar: library gradio_client belum terinstall."
+
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_file:
+                tmp_file.write(image_bytes)
+                tmp_path = tmp_file.name
+
+            logger.info("Menghubungi Moondream VLM Space (%s)...", MOONDREAM_API_URL)
+            client = Client(MOONDREAM_API_URL)
+
+            # Coba endpoint utama dulu
+            try:
+                result = client.predict(
+                    img=handle_file(tmp_path),
+                    prompt=question,
+                    api_name="/answer_question",
+                )
+                return str(result)
+            except Exception as ep1_err:
+                logger.warning(
+                    "Moondream endpoint /answer_question failed: %s, trying fallback...",
+                    str(ep1_err),
+                )
+                result = client.predict(
+                    img=handle_file(tmp_path),
+                    prompt=question,
+                    api_name="/answer_question_1",
+                )
+                return str(result)
+
+        except Exception as e:
+            logger.error("Moondream image analysis error: %s", str(e))
+            err_msg = str(e)
+            if "exception" in err_msg.lower() or "upstream" in err_msg.lower() or "timeout" in err_msg.lower():
+                return "Aduh, layanan Moondream VLM lagi cold start atau sibuk di Hugging Face 😢 Coba kirim gambarnya sekali lagi dalam beberapa detik ya~"
+            return f"Gagal menganalisis gambar: {str(e)}"
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+
+    return await asyncio.to_thread(_predict)
 
 
 # Map nama tool ke executor function
@@ -1997,6 +2258,10 @@ TOOL_EXECUTORS = {
     "list_vercel_deployments": list_vercel_deployments,
     "delete_vercel_deployment": delete_vercel_deployment,
     "search_and_send_image": search_and_send_image,
+    "simpan_aktivitas_neo4j": _lazy_simpan_aktivitas_neo4j,
+    "cari_aktivitas_neo4j": _lazy_cari_aktivitas_neo4j,
+    "search_design_reference": search_design_reference,
+    "analyze_image": analyze_image,
 }
 
 TOOL_HANDLERS = TOOL_EXECUTORS
@@ -2062,8 +2327,23 @@ async def execute_tool(
         return await executor(chat_id=chat_id, **args)
     elif func_name in ("upload_to_drive", "download_from_drive", "search_and_send_image"):
         return await executor(chat_id=chat_id, **args)
+    elif func_name in ("simpan_aktivitas_neo4j", "cari_aktivitas_neo4j"):
+        return await executor(chat_id=chat_id, **args)
     else:
-        return await executor(**args)
+        result = await executor(**args)
+        # Auto-log aktivitas penting ke Neo4j (fire-and-forget)
+        if isinstance(result, dict) and result.get("status") == "success":
+            try:
+                from src.neo4j_client import auto_log_aktivitas
+                if func_name == "deploy_to_vercel" and result.get("result_code") == "SUKSES":
+                    await auto_log_aktivitas(chat_id, "deploy", args.get("project_name", "unknown"))
+                elif func_name == "preview_with_codepen":
+                    await auto_log_aktivitas(chat_id, "preview", args.get("title", "unknown"))
+                elif func_name == "save_note_to_notion":
+                    await auto_log_aktivitas(chat_id, "simpan catatan", args.get("title", "unknown"))
+            except Exception as auto_log_err:
+                logger.warning("Auto-log Neo4j gagal (non-critical): %s", str(auto_log_err))
+        return result
 
 
 

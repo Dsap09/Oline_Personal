@@ -195,6 +195,16 @@ HEAVY_KEYWORDS = {
         "gambar", "foto", "image", "kirim gambar", "cari gambar", "cari foto",
         "tampilkan gambar", "kirimi gambar", "cariin gambar", "minta foto", "minta gambar",
     ],
+    "neo4j": [
+        "aktivitas", "simpan aktivitas", "catat aktivitas",
+        "riwayat aktivitas", "tampilkan aktivitas", "log aktivitas",
+        "forensik", "neo4j", "graph",
+    ],
+    "design_reference": [
+        "referensi desain", "cari referensi website", "inspirasi desain",
+        "contoh website", "cari desain website", "referensi landing page",
+        "referensi dari website", "referensinya dari",
+    ],
 }
 
 
@@ -403,14 +413,12 @@ async def handle_message(
     if intent is not None:
         await update.effective_chat.send_action("typing")
 
-    # Proses lewat Gemini (Fast Path tanpa tools jika intent=None, paksa Gemini jika intent preview/deploy)
-    use_gemini_only = intent in ("preview", "deploy")
+    # Proses lewat pipeline AI (DeepInfra untuk preview/deploy, Groq/Gemini untuk lainnya)
     response = await chat_with_oline(
         chat_id,
         user_message,
         user_name=user_name,
         intent=intent,
-        use_gemini_only=use_gemini_only,
     )
 
     # Kirim respons (split jika terlalu panjang)
@@ -446,12 +454,14 @@ async def handle_file_message(
     file_name = "file_oline"
     mime_type = "application/octet-stream"
 
+    is_photo = False
     if update.message.document:
         doc = update.message.document
         file_name = doc.file_name or "dokumen_oline"
         mime_type = doc.mime_type or "application/octet-stream"
         file_obj = await context.bot.get_file(doc.file_id)
     elif update.message.photo:
+        is_photo = True
         photo = update.message.photo[-1]
         file_name = f"foto_{photo.file_unique_id}.jpg"
         mime_type = "image/jpeg"
@@ -461,11 +471,22 @@ async def handle_file_message(
         return
 
     file_bytes = bytes(await file_obj.download_as_bytearray())
+    caption = (update.message.caption or "").strip()
+
+    # Jika foto dan bukan permintaan simpan ke drive secara eksplisit, gunakan Moondream VLM
+    is_drive_request = any(
+        kw in caption.lower() for kw in ["simpan", "folder", "drive", "upload", "database"]
+    )
+    if is_photo and not is_drive_request:
+        await update.effective_chat.send_action("typing")
+        from src.tools import analyze_image
+        question = caption or "Deskripsikan gambar ini"
+        result = await analyze_image(file_bytes, question)
+        await update.effective_chat.send_message(result)
+        return
 
     from src.kv import save_pending_file
     await save_pending_file(chat_id, file_name, file_bytes, mime_type)
-
-    caption = (update.message.caption or "").strip()
 
     user_name = "Teman"
     if update.effective_user and update.effective_user.first_name:
