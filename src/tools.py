@@ -2198,7 +2198,7 @@ async def analyze_image(
 ) -> str:
     """
     Menganalisis gambar dari bytearray/bytes menggunakan Moondream3 VLM (Primary)
-    dengan fallback otomatis ke Moondream2. Prompt dikirim dalam Bahasa Inggris untuk akurasi maksimal.
+    dengan fallback otomatis ke Moondream2. Menggunakan timeout 25 detik per Space dan logging eksplisit.
     """
     if not image_bytes:
         return "Gagal menganalisis gambar: data gambar kosong."
@@ -2208,78 +2208,86 @@ async def analyze_image(
         MOONDREAM_SPACE_2 or "vikhyatk/moondream2",
     ]
 
-    def _predict():
-        import tempfile
-        try:
+    import tempfile
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_file:
+            tmp_file.write(image_bytes)
+            tmp_path = tmp_file.name
+
+        prompt_text = question if question else ("objects" if task == "Object Detection" else "Describe this image.")
+
+        def _predict_single_space(space_url: str):
             from gradio_client import Client, handle_file
-        except ImportError as imp_err:
-            logger.error("gradio_client belum terinstall: %s", str(imp_err))
-            return "Gagal menganalisis gambar: library gradio_client belum terinstall."
+            logger.info("Mencoba analisis gambar via Moondream Space: %s (task: %s)...", space_url, task)
+            client = Client(space_url)
 
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_file:
-                tmp_file.write(image_bytes)
-                tmp_path = tmp_file.name
-
-            prompt_text = question if question else ("objects" if task == "Object Detection" else "Describe this image.")
-
-            for space_url in spaces:
-                if not space_url:
-                    continue
-
+            if "moondream3" in space_url.lower():
+                raw_result = client.predict(
+                    image=handle_file(tmp_path),
+                    prompt=prompt_text,
+                    task_type=task,
+                    max_objects=10,
+                    api_name="/detect_objects",
+                )
+                ans = clean_moondream_response(raw_result)
+                if ans:
+                    logger.info("Moondream VLM (%s) berhasil mengembalikan hasil (len=%d): %s", space_url, len(ans), ans[:150])
+                    return ans
+            else:
                 try:
-                    logger.info("Mencoba analisis gambar via Moondream Space: %s (task: %s)...", space_url, task)
-                    client = Client(space_url)
+                    raw_result = client.predict(
+                        img=handle_file(tmp_path),
+                        prompt=prompt_text,
+                        api_name="/answer_question",
+                    )
+                    ans = clean_moondream_response(raw_result)
+                    if ans:
+                        logger.info("Moondream VLM (%s) berhasil mengembalikan hasil (len=%d): %s", space_url, len(ans), ans[:150])
+                        return ans
+                except Exception as ep_err:
+                    logger.warning("Space %s /answer_question gagal: %s, mencoba fallback /answer_question_1...", space_url, str(ep_err))
+                    raw_result = client.predict(
+                        img=handle_file(tmp_path),
+                        prompt=prompt_text,
+                        api_name="/answer_question_1",
+                    )
+                    ans = clean_moondream_response(raw_result)
+                    if ans:
+                        logger.info("Moondream VLM (%s) berhasil mengembalikan hasil (len=%d): %s", space_url, len(ans), ans[:150])
+                        return ans
+            return None
 
-                    if "moondream3" in space_url.lower():
-                        # Moondream3 API: /detect_objects
-                        raw_result = client.predict(
-                            image=handle_file(tmp_path),
-                            prompt=prompt_text,
-                            task_type=task,
-                            max_objects=10,
-                            api_name="/detect_objects",
-                        )
-                        ans = clean_moondream_response(raw_result)
-                        if ans:
-                            return ans
-                    else:
-                        # Moondream2 API: /answer_question & /answer_question_1
-                        try:
-                            raw_result = client.predict(
-                                img=handle_file(tmp_path),
-                                prompt=prompt_text,
-                                api_name="/answer_question",
-                            )
-                            ans = clean_moondream_response(raw_result)
-                            if ans:
-                                return ans
-                        except Exception:
-                            raw_result = client.predict(
-                                img=handle_file(tmp_path),
-                                prompt=prompt_text,
-                                api_name="/answer_question_1",
-                            )
-                            ans = clean_moondream_response(raw_result)
-                            if ans:
-                                return ans
+        for space_url in spaces:
+            if not space_url:
+                continue
 
-                except Exception as space_err:
-                    logger.warning("Space %s gagal / offline: %s. Mencoba fallback...", space_url, str(space_err))
-                    continue
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(_predict_single_space, space_url),
+                    timeout=25.0,
+                )
+                if result:
+                    return result
+            except asyncio.TimeoutError:
+                logger.warning("Space %s timeout 25s terlampaui. Mencoba fallback...", space_url)
+                continue
+            except Exception as space_err:
+                logger.warning("Space %s gagal / offline: %s. Mencoba fallback...", space_url, str(space_err))
+                continue
 
-            return "Aduh, mataku lagi error nih. Semua Space Moondream sedang tidak aktif. Coba lagi nanti ya~"
+        return "Aduh, mataku lagi error nih. Semua Space Moondream sedang tidak aktif atau lambat. Coba lagi nanti ya~"
 
-        except Exception as e:
-            logger.error("Moondream image analysis error: %s", str(e))
-            return "Aduh, mataku lagi error nih. Semua Space Moondream sedang tidak aktif. Coba lagi nanti ya~"
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except Exception:
-                    pass
+    except Exception as e:
+        logger.error("Moondream image analysis error: %s", str(e))
+        return "Aduh, mataku lagi error nih. Semua Space Moondream sedang tidak aktif atau lambat. Coba lagi nanti ya~"
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
     return await asyncio.to_thread(_predict)
 

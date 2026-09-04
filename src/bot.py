@@ -479,6 +479,7 @@ async def handle_file_message(
     )
     if is_photo and not is_drive_request:
         await update.effective_chat.send_action("typing")
+        status_msg = await update.effective_chat.send_message("Oline sedang melihat... 👁️✨")
         from src.tools import analyze_image
 
         caption_lower = caption.lower()
@@ -493,7 +494,10 @@ async def handle_file_message(
         raw_result = await analyze_image(file_bytes, question=english_question, task=task)
 
         if "mataku lagi error" in raw_result or "Gagal menganalisis" in raw_result:
-            await update.effective_chat.send_message(raw_result)
+            try:
+                await status_msg.edit_text(raw_result)
+            except Exception:
+                await update.effective_chat.send_message(raw_result)
             return
 
         user_name = "Teman"
@@ -507,7 +511,15 @@ async def handle_file_message(
             f"Tolong sampaikan ulang kepada pengguna dalam Bahasa Indonesia yang natural, santai, dan mudah dipahami, sesuai gaya Oline. DILARANG menampilkan istilah teknis seperti 'Reasoning:' atau 'Answer:'."
         )
         response = await chat_with_oline(chat_id, translation_prompt, user_name=user_name)
-        await update.effective_chat.send_message(response)
+
+        # Preservasi hasil Moondream agar tidak hilang jika AI pipeline mengembalikan teks kosong
+        if not response or not response.strip():
+            response = f"Oline melihat ini: {raw_result} 😊"
+
+        try:
+            await status_msg.edit_text(response)
+        except Exception:
+            await update.effective_chat.send_message(response)
         return
 
     from src.kv import save_pending_file
