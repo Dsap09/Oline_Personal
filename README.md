@@ -9,7 +9,7 @@ Oline adalah bot Telegram asisten pribadi berpersona Gen-Z yang cerdas, cepat, d
 - **⚡ Fast Path (Groq API)** — Respon kilat untuk obrolan santai, sapaan, dan pertanyaan ringan menggunakan model `openai/gpt-oss-20b`.
 - **🛠️ Slow Path (Google Gemini API)** — Pemrosesan kecerdasan utama dengan rotasi model otomatis (`gemini-flash-lite-latest`, `gemini-2.5-flash`, `gemini-2.0-flash`) dan Function Calling untuk tugas kompleks.
 - **🛡️ Groq Slow Path Fallback** — Jika Gemini down (kuota habis/429/timeout), Oline otomatis fallback ke Groq dengan dukungan *Function Calling* (2-stage OpenAI tool execution) agar fitur bot tidak pernah mati.
-- **🖼️ Analisis Gambar (Moondream VLM)** — Analisis dan deskripsi foto/gambar otomatis dari chat Telegram menggunakan model **Moondream VLM** (via Hugging Face Space `vikhyatk/moondream2` & `gradio_client`).
+- **🖼️ Analisis Gambar (Moondream VLM)** — Analisis dan deskripsi foto/gambar otomatis dari chat Telegram menggunakan **Moondream3** (`merve/moondream3`) untuk Caption, Object Detection, dan VQA dengan fallback otomatis ke **Moondream2** (`vikhyatk/moondream2`).
 - **🎨 Search & Inspeksi Referensi Desain Website** — Mencari website referensi di internet (DuckDuckGo) dan menginspeksi elemen desainnya (font, warna hex dominan, struktur layout, hero text `<h1>`) via `BeautifulSoup` & `lxml` sebagai inspirasi landing page.
 - **🚀 Landing Page Preview & Vercel Deploy** — Pembuatan landing page modern anti-AI-slop dengan preview otomatis di CodePen (`preview_with_codepen`) dan deployment langsung ke Vercel (`deploy_to_vercel`).
 - **🔗 Activity Graph Log (Neo4j AuraDB)** — Penyimpanan & pencarian riwayat aktivitas pengguna dalam bentuk graph (`User` -[`:MELAKUKAN`]-> `Aktivitas`) dengan perekaman otomatis (*auto-log*) pada setiap aksi penting.
@@ -37,7 +37,7 @@ Oline adalah bot Telegram asisten pribadi berpersona Gen-Z yang cerdas, cepat, d
 | **Hosting** | Vercel (Serverless Functions) |
 | **Database / KV** | Vercel KV / Upstash Redis (REST API Pipeline) |
 | **Graph Database** | Neo4j AuraDB (`neo4j` official driver) |
-| **Vision Language Model** | Moondream VLM (`gradio_client`) |
+| **Vision Language Model** | Moondream3 (`merve/moondream3`) + Moondream2 (`vikhyatk/moondream2`) |
 | **HTML Parsing & Inspection** | `beautifulsoup4` & `lxml` |
 | **AI Primary Engine** | Google Gemini API (`google-genai` SDK) |
 | **AI Fast Engine & Fallback** | Groq API (`openai/gpt-oss-20b`) |
@@ -114,7 +114,7 @@ Isi variabel utama:
 - `GEMINI_API_KEY`: Dari [Google AI Studio](https://aistudio.google.com/apikey)
 - `GROQ_API_KEY`: Dari [Groq Console](https://console.groq.com/keys)
 - `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`: Dari [Neo4j AuraDB Console](https://console.neo4j.io/)
-- `MOONDREAM_API_URL`: Default `vikhyatk/moondream2`
+- `MOONDREAM_SPACE_1` & `MOONDREAM_SPACE_2`: Space Moondream utama (`merve/moondream3`) dan fallback (`vikhyatk/moondream2`)
 - `DEEPINFRA_API_KEY` & `DEEPINFRA_MODEL`: Dari [DeepInfra Console](https://deepinfra.com/)
 - `NOTION_API_KEY` & `NOTION_DATABASE_ID`: Dari [Notion Integrations](https://www.notion.so/my-integrations)
 - `VERCEL_API_TOKEN`: Dari [Vercel Tokens](https://vercel.com/account/tokens)

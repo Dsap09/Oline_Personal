@@ -480,8 +480,17 @@ async def handle_file_message(
     if is_photo and not is_drive_request:
         await update.effective_chat.send_action("typing")
         from src.tools import analyze_image
+
+        caption_lower = caption.lower()
+        if any(kw in caption_lower for kw in ["deteksi objek", "objek apa", "ada apa saja", "objek"]):
+            task = "Object Detection"
+        elif caption and ("?" in caption or len(caption.split()) > 2):
+            task = "Visual Question Answering"
+        else:
+            task = "Caption"
+
         question = caption or "Deskripsikan gambar ini"
-        result = await analyze_image(file_bytes, question)
+        result = await analyze_image(file_bytes, question=question, task=task)
         await update.effective_chat.send_message(result)
         return
 

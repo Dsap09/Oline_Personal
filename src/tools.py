@@ -39,8 +39,8 @@ OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY", "")
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 ITUNES_BASE_URL = "https://itunes.apple.com"
 OPENWEATHER_BASE_URL = "https://api.openweathermap.org/data/2.5"
-PISTON_EXECUTE_URL = "https://emkc.org/api/v2/piston/execute"
-MOONDREAM_API_URL = os.environ.get("MOONDREAM_API_URL", "vikhyatk/moondream2")
+MOONDREAM_SPACE_1 = os.environ.get("MOONDREAM_SPACE_1", "merve/moondream3")
+MOONDREAM_SPACE_2 = os.environ.get("MOONDREAM_SPACE_2", "vikhyatk/moondream2")
 
 
 # ============================================================
@@ -2170,13 +2170,21 @@ async def search_design_reference(query: str) -> dict[str, Any]:
         return {"status": "success", "results": "\n\n".join(summaries)}
 
 async def analyze_image(
-    image_bytes: bytes, question: str = "Deskripsikan gambar ini"
+    image_bytes: bytes,
+    question: str = "Deskripsikan gambar ini",
+    task: str = "Caption",
 ) -> str:
     """
-    Menganalisis gambar dari bytearray/bytes menggunakan Moondream VLM via gradio_client.
+    Menganalisis gambar dari bytearray/bytes menggunakan Moondream3 VLM (Primary)
+    dengan fallback otomatis ke Moondream2.
     """
     if not image_bytes:
         return "Gagal menganalisis gambar: data gambar kosong."
+
+    spaces = [
+        MOONDREAM_SPACE_1 or "merve/moondream3",
+        MOONDREAM_SPACE_2 or "vikhyatk/moondream2",
+    ]
 
     def _predict():
         import tempfile
@@ -2192,35 +2200,60 @@ async def analyze_image(
                 tmp_file.write(image_bytes)
                 tmp_path = tmp_file.name
 
-            logger.info("Menghubungi Moondream VLM Space (%s)...", MOONDREAM_API_URL)
-            client = Client(MOONDREAM_API_URL)
+            for space_url in spaces:
+                if not space_url:
+                    continue
 
-            # Coba endpoint utama dulu
-            try:
-                result = client.predict(
-                    img=handle_file(tmp_path),
-                    prompt=question,
-                    api_name="/answer_question",
-                )
-                return str(result)
-            except Exception as ep1_err:
-                logger.warning(
-                    "Moondream endpoint /answer_question failed: %s, trying fallback...",
-                    str(ep1_err),
-                )
-                result = client.predict(
-                    img=handle_file(tmp_path),
-                    prompt=question,
-                    api_name="/answer_question_1",
-                )
-                return str(result)
+                try:
+                    logger.info("Mencoba analisis gambar via Moondream Space: %s (task: %s)...", space_url, task)
+                    client = Client(space_url)
+
+                    if "moondream3" in space_url.lower():
+                        # Moondream3 API: /detect_objects
+                        prompt_text = question if question else ("objects" if task == "Object Detection" else "Describe this image.")
+                        result = client.predict(
+                            image=handle_file(tmp_path),
+                            prompt=prompt_text,
+                            task_type=task,
+                            max_objects=10,
+                            api_name="/detect_objects",
+                        )
+                        # result berbentuk tuple (result_img, model_response, value_16)
+                        if isinstance(result, (tuple, list)) and len(result) > 1:
+                            ans = str(result[1]).strip()
+                        else:
+                            ans = str(result).strip()
+
+                        if ans:
+                            return ans
+                    else:
+                        # Moondream2 API: /answer_question & /answer_question_1
+                        try:
+                            result = client.predict(
+                                img=handle_file(tmp_path),
+                                prompt=question,
+                                api_name="/answer_question",
+                            )
+                            if result:
+                                return str(result).strip()
+                        except Exception:
+                            result = client.predict(
+                                img=handle_file(tmp_path),
+                                prompt=question,
+                                api_name="/answer_question_1",
+                            )
+                            if result:
+                                return str(result).strip()
+
+                except Exception as space_err:
+                    logger.warning("Space %s gagal / offline: %s. Mencoba fallback...", space_url, str(space_err))
+                    continue
+
+            return "Aduh, mataku lagi error nih. Semua Space Moondream sedang tidak aktif. Coba lagi nanti ya~"
 
         except Exception as e:
             logger.error("Moondream image analysis error: %s", str(e))
-            err_msg = str(e)
-            if "exception" in err_msg.lower() or "upstream" in err_msg.lower() or "timeout" in err_msg.lower():
-                return "Aduh, layanan Moondream VLM lagi cold start atau sibuk di Hugging Face 😢 Coba kirim gambarnya sekali lagi dalam beberapa detik ya~"
-            return f"Gagal menganalisis gambar: {str(e)}"
+            return "Aduh, mataku lagi error nih. Semua Space Moondream sedang tidak aktif. Coba lagi nanti ya~"
         finally:
             if tmp_path and os.path.exists(tmp_path):
                 try:
