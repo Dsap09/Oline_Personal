@@ -489,9 +489,25 @@ async def handle_file_message(
         else:
             task = "Caption"
 
-        question = caption or "Deskripsikan gambar ini"
-        result = await analyze_image(file_bytes, question=question, task=task)
-        await update.effective_chat.send_message(result)
+        english_question = caption if caption else ("objects" if task == "Object Detection" else "Describe this image.")
+        raw_result = await analyze_image(file_bytes, question=english_question, task=task)
+
+        if "mataku lagi error" in raw_result or "Gagal menganalisis" in raw_result:
+            await update.effective_chat.send_message(raw_result)
+            return
+
+        user_name = "Teman"
+        if update.effective_user and update.effective_user.first_name:
+            user_name = update.effective_user.first_name
+
+        translation_prompt = (
+            f"Berikut adalah hasil analisis gambar dari model vision (dalam bahasa Inggris):\n"
+            f"\"{raw_result}\"\n\n"
+            f"Pertanyaan/caption pengguna: \"{caption or 'Deskripsikan gambar ini'}\"\n\n"
+            f"Tolong sampaikan ulang kepada pengguna dalam Bahasa Indonesia yang natural, santai, dan mudah dipahami, sesuai gaya Oline. DILARANG menampilkan istilah teknis seperti 'Reasoning:' atau 'Answer:'."
+        )
+        response = await chat_with_oline(chat_id, translation_prompt, user_name=user_name)
+        await update.effective_chat.send_message(response)
         return
 
     from src.kv import save_pending_file

@@ -2169,14 +2169,36 @@ async def search_design_reference(query: str) -> dict[str, Any]:
 
         return {"status": "success", "results": "\n\n".join(summaries)}
 
+def clean_moondream_response(result: Any) -> str:
+    """
+    Pembersih hasil output Moondream VLM:
+    - Menghilangkan awalan/bagian teknis seperti 'Answer:' atau 'Reasoning:'
+    - Merapikan karakter newline dan whitespace.
+    """
+    if isinstance(result, (tuple, list)) and len(result) > 1:
+        text = str(result[1])
+    else:
+        text = str(result)
+
+    if "Answer:" in text:
+        text = text.split("Answer:")[-1].strip()
+
+    if "Reasoning:" in text:
+        parts = text.split("Reasoning:")
+        text = parts[0].strip() if parts[0].strip() else parts[-1].strip()
+
+    text = text.replace("\\n", "\n").strip()
+    return text
+
+
 async def analyze_image(
     image_bytes: bytes,
-    question: str = "Deskripsikan gambar ini",
+    question: str = "Describe this image.",
     task: str = "Caption",
 ) -> str:
     """
     Menganalisis gambar dari bytearray/bytes menggunakan Moondream3 VLM (Primary)
-    dengan fallback otomatis ke Moondream2.
+    dengan fallback otomatis ke Moondream2. Prompt dikirim dalam Bahasa Inggris untuk akurasi maksimal.
     """
     if not image_bytes:
         return "Gagal menganalisis gambar: data gambar kosong."
@@ -2200,6 +2222,8 @@ async def analyze_image(
                 tmp_file.write(image_bytes)
                 tmp_path = tmp_file.name
 
+            prompt_text = question if question else ("objects" if task == "Object Detection" else "Describe this image.")
+
             for space_url in spaces:
                 if not space_url:
                     continue
@@ -2210,40 +2234,36 @@ async def analyze_image(
 
                     if "moondream3" in space_url.lower():
                         # Moondream3 API: /detect_objects
-                        prompt_text = question if question else ("objects" if task == "Object Detection" else "Describe this image.")
-                        result = client.predict(
+                        raw_result = client.predict(
                             image=handle_file(tmp_path),
                             prompt=prompt_text,
                             task_type=task,
                             max_objects=10,
                             api_name="/detect_objects",
                         )
-                        # result berbentuk tuple (result_img, model_response, value_16)
-                        if isinstance(result, (tuple, list)) and len(result) > 1:
-                            ans = str(result[1]).strip()
-                        else:
-                            ans = str(result).strip()
-
+                        ans = clean_moondream_response(raw_result)
                         if ans:
                             return ans
                     else:
                         # Moondream2 API: /answer_question & /answer_question_1
                         try:
-                            result = client.predict(
+                            raw_result = client.predict(
                                 img=handle_file(tmp_path),
-                                prompt=question,
+                                prompt=prompt_text,
                                 api_name="/answer_question",
                             )
-                            if result:
-                                return str(result).strip()
+                            ans = clean_moondream_response(raw_result)
+                            if ans:
+                                return ans
                         except Exception:
-                            result = client.predict(
+                            raw_result = client.predict(
                                 img=handle_file(tmp_path),
-                                prompt=question,
+                                prompt=prompt_text,
                                 api_name="/answer_question_1",
                             )
-                            if result:
-                                return str(result).strip()
+                            ans = clean_moondream_response(raw_result)
+                            if ans:
+                                return ans
 
                 except Exception as space_err:
                     logger.warning("Space %s gagal / offline: %s. Mencoba fallback...", space_url, str(space_err))
