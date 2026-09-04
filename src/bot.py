@@ -431,26 +431,43 @@ async def handle_message(
         await update.effective_chat.send_message(response)
 
 
+async def download_telegram_file_with_retry(
+    context: ContextTypes.DEFAULT_TYPE, file_id: str, max_retries: int = 3
+) -> bytes | None:
+    """
+    Mengunduh file dari Telegram API dengan percobaan ulang (retry 3x) jika terjadi timeout/network error.
+    """
+    for attempt in range(1, max_retries + 1):
+        try:
+            file_obj = await context.bot.get_file(file_id)
+            byte_arr = await file_obj.download_as_bytearray()
+            return bytes(byte_arr)
+        except Exception as e:
+            logger.warning("Attempt %d/%d download Telegram file (%s) failed: %s", attempt, max_retries, file_id, str(e))
+            if attempt < max_retries:
+                await asyncio.sleep(attempt * 1.0)
+    return None
+
+
 async def handle_file_message(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """
-    Handler untuk pesan dokumen dan foto yang diunggah pengguna ke Telegram.
-    Mendownload file bytes, menyimpan ke KV cache sementara, dan memproses caption jika ada.
+    Handler untuk menerima foto atau dokumen yang dikirim pengguna.
+    Menggunakan retry otomatis, kompresi foto, dan analisis Moondream VLM.
     """
     if not update.effective_chat or not update.message:
         return
 
     chat_id = update.effective_chat.id
 
-    # Rate limiting
     if not await check_rate_limit(chat_id):
         await update.effective_chat.send_message(
             "sabar ya, kamu udah kebanyakan chat 😅 tunggu sebentar lagi."
         )
         return
 
-    file_obj = None
+    file_id = None
     file_name = "file_oline"
     mime_type = "application/octet-stream"
 
@@ -459,18 +476,26 @@ async def handle_file_message(
         doc = update.message.document
         file_name = doc.file_name or "dokumen_oline"
         mime_type = doc.mime_type or "application/octet-stream"
-        file_obj = await context.bot.get_file(doc.file_id)
+        file_id = doc.file_id
     elif update.message.photo:
         is_photo = True
         photo = update.message.photo[-1]
         file_name = f"foto_{photo.file_unique_id}.jpg"
         mime_type = "image/jpeg"
-        file_obj = await context.bot.get_file(photo.file_id)
+        file_id = photo.file_id
 
-    if not file_obj:
+    if not file_id:
         return
 
-    file_bytes = bytes(await file_obj.download_as_bytearray())
+    await update.effective_chat.send_action("typing")
+    file_bytes = await download_telegram_file_with_retry(context, file_id)
+
+    if not file_bytes:
+        await update.effective_chat.send_message(
+            "aduh, gagal mengunduh file/foto dari Telegram nih 😢 koneksi lagi lambat. Coba kirim ulang ya!"
+        )
+        return
+
     caption = (update.message.caption or "").strip()
 
     # Jika foto dan bukan permintaan simpan ke drive secara eksplisit, gunakan Moondream VLM
@@ -491,6 +516,8 @@ async def handle_file_message(
             task = "Caption"
 
         english_question = caption if caption else ("objects" if task == "Object Detection" else "Describe this image.")
+
+        await update.effective_chat.send_action("typing")
         raw_result = await analyze_image(file_bytes, question=english_question, task=task)
 
         if "mataku lagi error" in raw_result or "Gagal menganalisis" in raw_result:
@@ -510,6 +537,8 @@ async def handle_file_message(
             f"Pertanyaan/caption pengguna: \"{caption or 'Deskripsikan gambar ini'}\"\n\n"
             f"Tolong sampaikan ulang kepada pengguna dalam Bahasa Indonesia yang natural, santai, dan mudah dipahami, sesuai gaya Oline. DILARANG menampilkan istilah teknis seperti 'Reasoning:' atau 'Answer:'."
         )
+
+        await update.effective_chat.send_action("typing")
         response = await chat_with_oline(chat_id, translation_prompt, user_name=user_name)
 
         # Preservasi hasil Moondream agar tidak hilang jika AI pipeline mengembalikan teks kosong

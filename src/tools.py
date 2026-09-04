@@ -2191,6 +2191,48 @@ def clean_moondream_response(result: Any) -> str:
     return text
 
 
+def optimize_image_bytes(
+    image_bytes: bytes, max_size_bytes: int = 3 * 1024 * 1024, max_dimension: int = 1280
+) -> bytes:
+    """
+    Mengompresi dan meresize gambar jika ukurannya melebihi max_size_bytes (misal > 3MB).
+    Dimensi gambar dibatasi hingga max_dimension piksel dan dikompresi ke format JPEG (quality 85).
+    Lazy loading `from PIL import Image`.
+    """
+    if not image_bytes:
+        return image_bytes
+
+    if len(image_bytes) <= max_size_bytes:
+        return image_bytes
+
+    try:
+        import io
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(image_bytes))
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+
+        width, height = img.size
+        if width > max_dimension or height > max_dimension:
+            if width > height:
+                new_width = max_dimension
+                new_height = int(height * (max_dimension / width))
+            else:
+                new_height = max_dimension
+                new_width = int(width * (max_dimension / height))
+            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+        out_buf = io.BytesIO()
+        img.save(out_buf, format="JPEG", quality=85, optimize=True)
+        optimized = out_buf.getvalue()
+        logger.info("Gambar dioptimasi: %d bytes -> %d bytes", len(image_bytes), len(optimized))
+        return optimized
+    except Exception as e:
+        logger.warning("Gagal mengompresi gambar: %s, menggunakan bytes asli.", str(e))
+        return image_bytes
+
+
 async def analyze_image(
     image_bytes: bytes,
     question: str = "Describe this image.",
@@ -2202,6 +2244,9 @@ async def analyze_image(
     """
     if not image_bytes:
         return "Gagal menganalisis gambar: data gambar kosong."
+
+    # Otomatis kompresi gambar jika > 3MB
+    image_bytes = optimize_image_bytes(image_bytes)
 
     spaces = [
         MOONDREAM_SPACE_1 or "merve/moondream3",
