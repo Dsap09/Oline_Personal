@@ -96,11 +96,25 @@ class TestOpenRouterRotation(unittest.IsolatedAsyncioTestCase):
 
     @patch("src.kv.get_cache", new_callable=AsyncMock)
     async def test_get_openrouter_quota_info(self, mock_get_cache):
-        """Tes get_openrouter_quota_info mengembalikan model aktif dan daftar rotasi."""
-        mock_get_cache.return_value = "5"
+        """Tes get_openrouter_quota_info mengembalikan model aktif, sisa request & token, dan daftar rotasi."""
+        def side_effect(key):
+            if key == "openrouter:ratelimit:model1/test-a":
+                import json
+                return json.dumps({
+                    "remaining_requests": 95,
+                    "limit_requests": 100,
+                    "remaining_tokens": 48000,
+                    "limit_tokens": 50000,
+                })
+            return "5"
+
+        mock_get_cache.side_effect = side_effect
         info = await get_openrouter_quota_info(chat_id=123)
 
         self.assertEqual(info["active_model"], "model1/test-a")
+        self.assertEqual(info["next_model"], "model2/test-b")
+        self.assertIn("95 / 100 request", info["active_model_remaining_requests"])
+        self.assertIn("48000 / 50000 token", info["active_model_remaining_tokens"])
         self.assertEqual(info["total_models"], 3)
         self.assertEqual(len(info["models_status"]), 3)
         self.assertEqual(info["models_status"][0]["model"], "model1/test-a")
@@ -115,6 +129,9 @@ class TestOpenRouterRotation(unittest.IsolatedAsyncioTestCase):
         mock_groq.return_value = 200
         mock_openrouter.return_value = {
             "active_model": "poolside/laguna-s-2.1",
+            "active_model_remaining_requests": "95 / 100 request (Sisa 95 req sebelum beralih ke thinkingmachines/inkling)",
+            "active_model_remaining_tokens": "48000 / 50000 token",
+            "next_model": "thinkingmachines/inkling",
             "total_models": 5,
             "remaining_in_rotation": 5,
             "total_requests_today": 12,
@@ -128,6 +145,10 @@ class TestOpenRouterRotation(unittest.IsolatedAsyncioTestCase):
         res = await execute_check_quota(chat_id=999)
         self.assertIn("openrouter_summary", res)
         self.assertEqual(res["openrouter_active_model"], "poolside/laguna-s-2.1")
+        self.assertEqual(res["openrouter_next_model"], "thinkingmachines/inkling")
+        self.assertIn("Sisa Request Model Aktif", res["openrouter_summary"])
+        self.assertIn("95 / 100 request", res["openrouter_summary"])
+        self.assertIn("48000 / 50000 token", res["openrouter_summary"])
         self.assertEqual(res["openrouter_remaining_models_before_fallback"], 5)
         self.assertIn("poolside/laguna-s-2.1", res["openrouter_summary"])
         self.assertIn("Cadangan jika semua model OpenRouter limit", res["fallback_queue_info"])
@@ -135,3 +156,4 @@ class TestOpenRouterRotation(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

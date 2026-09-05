@@ -68,6 +68,29 @@ def convert_gemini_tools_to_openai(tool_declarations: Optional[list[dict]]) -> O
     return openai_tools if openai_tools else None
 
 
+async def save_openrouter_rate_limits(model: str, headers: Any) -> None:
+    """
+    Menyimpan metadata rate-limit (remaining/limit requests & tokens) dari header HTTP OpenRouter ke Vercel KV.
+    """
+    try:
+        from src.kv import set_cache
+        rem_req = headers.get("x-ratelimit-remaining-requests") or headers.get("x-ratelimit-remaining")
+        limit_req = headers.get("x-ratelimit-limit-requests") or headers.get("x-ratelimit-limit")
+        rem_tok = headers.get("x-ratelimit-remaining-tokens")
+        limit_tok = headers.get("x-ratelimit-limit-tokens")
+
+        if rem_req is not None or rem_tok is not None or limit_req is not None:
+            payload = json.dumps({
+                "remaining_requests": rem_req,
+                "limit_requests": limit_req,
+                "remaining_tokens": rem_tok,
+                "limit_tokens": limit_tok,
+            })
+            await set_cache(f"openrouter:ratelimit:{model}", payload, ttl_seconds=86400)
+    except Exception as e:
+        logger.warning("Gagal menyimpan rate limit OpenRouter: %s", str(e))
+
+
 async def record_openrouter_usage(chat_id: int, model: str, req_count: int = 1) -> None:
     """
     Mencatat jumlah penggunaan request per model dan total untuk hari ini ke Vercel KV.
@@ -93,13 +116,16 @@ async def record_openrouter_usage(chat_id: int, model: str, req_count: int = 1) 
 
 async def get_openrouter_quota_info(chat_id: int = 0) -> dict[str, Any]:
     """
-    Mengambil rincian status rotasi model OpenRouter, model aktif, pemakaian, dan sisa antrean fallback.
+    Mengambil rincian status rotasi model OpenRouter, model aktif, sisa request & token spesifik model aktif,
+    model berikutnya pada rotasi, dan status antrean sebelum fallback.
     """
     models = get_model_list()
     today = datetime.now().strftime("%Y-%m-%d")
 
     from src.kv import get_cache
     active_model = None
+    active_model_idx = -1
+    next_model = None
     models_status = []
     remaining_in_rotation = 0
 
@@ -113,9 +139,12 @@ async def get_openrouter_quota_info(chat_id: int = 0) -> dict[str, Any]:
             status_str = "Rate Limited (429)"
         elif active_model is None:
             active_model = m
+            active_model_idx = idx - 1
             status_str = "Aktif (Primary)"
             remaining_in_rotation += 1
         else:
+            if next_model is None and active_model is not None:
+                next_model = m
             status_str = f"Antrean ke-{idx}"
             remaining_in_rotation += 1
 
@@ -130,8 +159,39 @@ async def get_openrouter_quota_info(chat_id: int = 0) -> dict[str, Any]:
     total_val = await get_cache(key_total)
     total_usage = int(total_val or "0")
 
+    # Ambil rincian sisa kuota spesifik model aktif dari KV
+    active_remaining_info = "Kuota Penuh / Belum Terpakai (Akan beralih jika limit)"
+    active_token_info = "Tidak terbatas / Sesuai rate limit OpenRouter"
+
+    if active_model:
+        rl_val = await get_cache(f"openrouter:ratelimit:{active_model}")
+        if rl_val:
+            try:
+                rl_data = json.loads(rl_val)
+                rem_req = rl_data.get("remaining_requests")
+                lim_req = rl_data.get("limit_requests")
+                rem_tok = rl_data.get("remaining_tokens")
+                lim_tok = rl_data.get("limit_tokens")
+
+                next_name = next_model if next_model else "model berikutnya"
+                if rem_req is not None and lim_req is not None:
+                    active_remaining_info = f"{rem_req} / {lim_req} request (Sisa {rem_req} req sebelum beralih ke {next_name})"
+                elif rem_req is not None:
+                    active_remaining_info = f"Sisa {rem_req} request (sebelum beralih ke {next_name})"
+
+                if rem_tok is not None and lim_tok is not None:
+                    active_token_info = f"{rem_tok} / {lim_tok} token"
+                elif rem_tok is not None:
+                    active_token_info = f"Sisa {rem_tok} token"
+            except Exception:
+                pass
+
     return {
         "active_model": active_model or (models[0] if models else "Tidak ada"),
+        "active_model_order": active_model_idx + 1 if active_model_idx != -1 else 1,
+        "next_model": next_model or "Tidak ada (Model terakhir sebelum fallback Groq/Gemini)",
+        "active_model_remaining_requests": active_remaining_info,
+        "active_model_remaining_tokens": active_token_info,
         "total_models": len(models),
         "remaining_in_rotation": remaining_in_rotation,
         "models_status": models_status,
@@ -204,6 +264,9 @@ async def chat_openrouter(
                     _LIMITED_MODELS.add(model)
                     continue
 
+                # Tangkap header rate limit
+                await save_openrouter_rate_limits(model, resp.headers)
+
                 res_json = resp.json()
                 choices = res_json.get("choices", [])
                 if not choices:
@@ -253,6 +316,7 @@ async def chat_openrouter(
                 }
                 followup_resp = await client.post(OPENROUTER_API_URL, json=followup_payload, headers=headers)
                 if followup_resp.status_code == 200:
+                    await save_openrouter_rate_limits(model, followup_resp.headers)
                     followup_json = followup_resp.json()
                     followup_choices = followup_json.get("choices", [])
                     if followup_choices:

@@ -979,6 +979,9 @@ async def execute_check_quota(chat_id: int) -> dict[str, Any]:
         logger.warning("Gagal mengambil info kuota OpenRouter: %s", str(e))
         openrouter_info = {
             "active_model": "Belum dikonfigurasi",
+            "active_model_remaining_requests": "N/A",
+            "active_model_remaining_tokens": "N/A",
+            "next_model": "N/A",
             "models_status": [],
             "remaining_in_rotation": 0,
             "total_requests_today": 0,
@@ -986,6 +989,9 @@ async def execute_check_quota(chat_id: int) -> dict[str, Any]:
         }
 
     active_model = openrouter_info.get("active_model", "N/A")
+    active_req_rem = openrouter_info.get("active_model_remaining_requests", "N/A")
+    active_tok_rem = openrouter_info.get("active_model_remaining_tokens", "N/A")
+    next_model = openrouter_info.get("next_model", "N/A")
     rem_models = openrouter_info.get("remaining_in_rotation", 0)
     total_reqs = openrouter_info.get("total_requests_today", 0)
     models_status = openrouter_info.get("models_status", [])
@@ -1002,12 +1008,18 @@ async def execute_check_quota(chat_id: int) -> dict[str, Any]:
     return {
         "date": format_date_indonesian(datetime.now().strftime("%Y-%m-%d")),
         "openrouter_active_model": active_model,
+        "openrouter_active_model_remaining_requests": active_req_rem,
+        "openrouter_active_model_remaining_tokens": active_tok_rem,
+        "openrouter_next_model": next_model,
         "openrouter_remaining_models_before_fallback": rem_models,
         "openrouter_total_requests_today": total_reqs,
         "openrouter_summary": (
             f"🌐 OpenRouter Model Rotation (Jalur Utama Chat & Fitur Umum):\n"
             f"  - Model Aktif: {active_model}\n"
-            f"  - Total Pemakaian Hari Ini: {total_reqs} request\n"
+            f"  - Sisa Request Model Aktif: {active_req_rem}\n"
+            f"  - Sisa Token Model Aktif: {active_tok_rem}\n"
+            f"  - Model Selanjutnya Jika Rotasi: {next_model}\n"
+            f"  - Total Pemakaian OpenRouter Hari Ini: {total_reqs} request\n"
             f"  - Sisa Model Antrean Sebelum Fallback: {rem_models} model\n"
             f"  - Daftar Rotasi Model:\n{status_str}"
         ),
