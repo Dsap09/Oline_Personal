@@ -30,6 +30,7 @@ DEFAULT_OPENROUTER_MODELS = [
 ]
 
 _LIMITED_MODELS: set[str] = set()
+_LOCAL_KV_STORE: dict[str, str] = {}
 
 
 def get_model_list() -> list[str]:
@@ -75,7 +76,7 @@ def convert_gemini_tools_to_openai(tool_declarations: Optional[list[dict]]) -> O
 
 async def save_openrouter_rate_limits(model: str, headers: Any) -> None:
     """
-    Menyimpan metadata rate-limit (remaining/limit requests & tokens) dari header HTTP OpenRouter ke Vercel KV.
+    Menyimpan metadata rate-limit (remaining/limit requests & tokens) dari header HTTP OpenRouter ke Vercel KV & Local Cache.
     """
     try:
         from src.kv import set_cache
@@ -91,14 +92,16 @@ async def save_openrouter_rate_limits(model: str, headers: Any) -> None:
                 "remaining_tokens": rem_tok,
                 "limit_tokens": limit_tok,
             })
-            await set_cache(f"openrouter:ratelimit:{model}", payload, ttl_seconds=86400)
+            key = f"openrouter:ratelimit:{model}"
+            _LOCAL_KV_STORE[key] = payload
+            await set_cache(key, payload, ttl_seconds=86400)
     except Exception as e:
         logger.warning("Gagal menyimpan rate limit OpenRouter: %s", str(e))
 
 
 async def record_openrouter_usage(chat_id: int, model: str, req_count: int = 1) -> None:
     """
-    Mencatat jumlah penggunaan request per model dan total untuk hari ini ke Vercel KV.
+    Mencatat jumlah penggunaan request per model dan total untuk hari ini ke Vercel KV & Local Cache.
     """
     try:
         from src.kv import set_cache, get_cache
@@ -106,14 +109,16 @@ async def record_openrouter_usage(chat_id: int, model: str, req_count: int = 1) 
 
         # Model specific usage
         key_model = f"usage:openrouter:{model}:{today}"
-        cur_val = await get_cache(key_model)
+        cur_val = await get_cache(key_model) or _LOCAL_KV_STORE.get(key_model)
         count = int(cur_val or "0") + req_count
+        _LOCAL_KV_STORE[key_model] = str(count)
         await set_cache(key_model, str(count), ttl_seconds=86400)
 
         # Total OpenRouter usage
         key_total = f"usage:openrouter:total:{today}"
-        cur_tot = await get_cache(key_total)
+        cur_tot = await get_cache(key_total) or _LOCAL_KV_STORE.get(key_total)
         tot_count = int(cur_tot or "0") + req_count
+        _LOCAL_KV_STORE[key_total] = str(tot_count)
         await set_cache(key_total, str(tot_count), ttl_seconds=86400)
     except Exception as e:
         logger.warning("Gagal mencatat pemakaian OpenRouter: %s", str(e))
@@ -136,7 +141,7 @@ async def get_openrouter_quota_info(chat_id: int = 0) -> dict[str, Any]:
 
     for idx, m in enumerate(models, start=1):
         key_model = f"usage:openrouter:{m}:{today}"
-        usage_val = await get_cache(key_model)
+        usage_val = await get_cache(key_model) or _LOCAL_KV_STORE.get(key_model)
         usage_count = int(usage_val or "0")
 
         is_limited = m in _LIMITED_MODELS
@@ -161,15 +166,15 @@ async def get_openrouter_quota_info(chat_id: int = 0) -> dict[str, Any]:
         })
 
     key_total = f"usage:openrouter:total:{today}"
-    total_val = await get_cache(key_total)
+    total_val = await get_cache(key_total) or _LOCAL_KV_STORE.get(key_total)
     total_usage = int(total_val or "0")
 
-    # Ambil rincian sisa kuota spesifik model aktif dari KV
+    # Ambil rincian sisa kuota spesifik model aktif dari KV atau Local Cache
     active_remaining_info = "Kuota Penuh / Belum Terpakai (Akan beralih jika limit)"
     active_token_info = "Tidak terbatas / Sesuai rate limit OpenRouter"
 
     if active_model:
-        rl_val = await get_cache(f"openrouter:ratelimit:{active_model}")
+        rl_val = await get_cache(f"openrouter:ratelimit:{active_model}") or _LOCAL_KV_STORE.get(f"openrouter:ratelimit:{active_model}")
         if rl_val:
             try:
                 rl_data = json.loads(rl_val)
