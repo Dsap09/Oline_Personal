@@ -2405,6 +2405,53 @@ async def analyze_image(
     return await asyncio.to_thread(_predict)
 
 
+async def identify_image_subject(
+    image_bytes: bytes, context_hint: str = ""
+) -> str:
+    """
+    Mengidentifikasi objek, orang, tempat, hewan, makanan, kendaraan, tanaman, atau benda apa pun
+    dalam gambar dengan menganalisis gambar via Moondream VLM lalu mencari di internet via DuckDuckGo.
+    """
+    if not image_bytes:
+        return "Gagal menganalisis gambar: data gambar kosong."
+
+    prompt = "Describe this image in detail, including type of object, person, place, animal, food, vehicle, plant, or thing."
+    deskripsi = await analyze_image(image_bytes, question=prompt, task="Caption")
+
+    if "mataku lagi error" in deskripsi or "Gagal menganalisis" in deskripsi:
+        return deskripsi
+
+    hint_clean = (context_hint or "").strip()
+    query_hint = re.sub(r"\b(ini|apa|siapa|identifikasi|tolong|dong|ya|kah|apakah)\b", "", hint_clean, flags=re.IGNORECASE).strip()
+
+    search_query = f"{query_hint} {deskripsi[:120]}".strip() if query_hint else deskripsi[:120].strip()
+
+    def _do_ddgs():
+        try:
+            try:
+                from ddgs import DDGS
+            except ImportError:
+                from duckduckgo_search import DDGS
+            with DDGS() as ddgs:
+                return list(ddgs.text(search_query, max_results=3))
+        except Exception as e:
+            logger.warning("DDGS text search error in identify_image_subject: %s", str(e))
+            return []
+
+    try:
+        results = await asyncio.to_thread(_do_ddgs)
+    except Exception as err:
+        logger.warning("Thread error in identify_image_subject: %s", str(err))
+        results = []
+
+    if not results:
+        return f"Aku bisa lihat gambarnya: {deskripsi}. Tapi belum bisa pastikan nama atau identitas spesifiknya."
+
+    kandidat = [r.get("title", "") for r in results if r.get("title")]
+    candidates_str = ", ".join(kandidat[:2]) if kandidat else "tidak terdeteksi"
+    return f"Dari gambar ini, kemungkinan besar adalah {candidates_str}. ({deskripsi})"
+
+
 # Map nama tool ke executor function
 TOOL_EXECUTORS = {
     "get_movie_recommendation": get_movie_recommendation,
@@ -2436,6 +2483,7 @@ TOOL_EXECUTORS = {
     "cari_aktivitas_neo4j": _lazy_cari_aktivitas_neo4j,
     "search_design_reference": search_design_reference,
     "analyze_image": analyze_image,
+    "identify_image_subject": identify_image_subject,
 }
 
 TOOL_HANDLERS = TOOL_EXECUTORS
@@ -2490,6 +2538,7 @@ async def execute_tool(
                 "search_internet": ("typing", "Aku cari dulu ya~"),
                 "get_weather_forecast": ("typing", None),
                 "get_stock_price": ("typing", None),
+                "identify_image_subject": ("typing", "Oline lagi cari tahu gambar ini... 🔍✨"),
             }
             if func_name in tool_notifs:
                 act, msg = tool_notifs[func_name]

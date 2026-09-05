@@ -504,21 +504,28 @@ async def handle_file_message(
     )
     if is_photo and not is_drive_request:
         await update.effective_chat.send_action("typing")
-        status_msg = await update.effective_chat.send_message("Oline lagi lihat gambarnya dulu ya~ 👀")
-        from src.tools import analyze_image
-
         caption_lower = caption.lower()
-        if any(kw in caption_lower for kw in ["deteksi objek", "objek apa", "ada apa saja", "objek"]):
-            task = "Object Detection"
-        elif caption and ("?" in caption or len(caption.split()) > 2):
-            task = "Visual Question Answering"
+        is_identification = any(kw in caption_lower for kw in ["ini apa", "ini siapa", "identifikasi", "apa ini", "siapa ini", "merek apa", "siapa dia"])
+
+        if is_identification:
+            status_msg = await update.effective_chat.send_message("Oline lagi cari tahu gambar ini... 🔍✨")
+            from src.tools import identify_image_subject
+            raw_result = await identify_image_subject(file_bytes, context_hint=caption)
         else:
-            task = "Caption"
+            status_msg = await update.effective_chat.send_message("Oline lagi lihat gambarnya dulu ya~ 👀")
+            from src.tools import analyze_image
 
-        english_question = caption if caption else ("objects" if task == "Object Detection" else "Describe this image.")
+            if any(kw in caption_lower for kw in ["deteksi objek", "objek apa", "ada apa saja", "objek"]):
+                task = "Object Detection"
+            elif caption and ("?" in caption or len(caption.split()) > 2):
+                task = "Visual Question Answering"
+            else:
+                task = "Caption"
 
-        await update.effective_chat.send_action("typing")
-        raw_result = await analyze_image(file_bytes, question=english_question, task=task)
+            english_question = caption if caption else ("objects" if task == "Object Detection" else "Describe this image.")
+
+            await update.effective_chat.send_action("typing")
+            raw_result = await analyze_image(file_bytes, question=english_question, task=task)
 
         if "mataku lagi error" in raw_result or "Gagal menganalisis" in raw_result:
             try:
