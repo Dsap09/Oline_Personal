@@ -501,18 +501,20 @@ async def save_pending_task(
     """
     Menyimpan perintah yang gagal dieksekusi ke KV untuk dicoba ulang nanti.
     Hanya menyimpan 1 pending task per user (overwrite yang lama).
-    TTL 1 jam (3600 detik) — perintah yang terlalu lama tidak relevan lagi.
+    TTL 1 jam (3600 detik).
     """
     key = f"{PENDING_TASK_PREFIX}:{chat_id}"
-    # Batasi panjang error_reason agar tidak membengkakkan KV
     safe_error = str(error_reason)[:200] if error_reason else ""
     payload = json.dumps({
+        "perintah": user_message,
         "message": user_message,
         "intent": intent,
         "user_name": user_name,
         "error_reason": safe_error,
+        "waktu": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
         "retry_count": 0,
+        "max_retry": 1,
     }, ensure_ascii=False)
     result = await _kv_request(["SET", key, payload, "EX", "3600"])
     if result is not None:
@@ -532,7 +534,9 @@ async def get_pending_task(chat_id: int) -> Optional[dict]:
             data = result["result"]
             if isinstance(data, str):
                 data = json.loads(data)
-            if isinstance(data, dict) and "message" in data:
+            if isinstance(data, dict) and ("message" in data or "perintah" in data):
+                if "message" not in data and "perintah" in data:
+                    data["message"] = data["perintah"]
                 return data
         except (json.JSONDecodeError, TypeError) as e:
             logger.warning("Error parsing pending task from KV: %s", str(e))
@@ -541,7 +545,7 @@ async def get_pending_task(chat_id: int) -> Optional[dict]:
 
 async def clear_pending_task(chat_id: int) -> bool:
     """
-    Menghapus pending task setelah berhasil dieksekusi ulang atau expired.
+    Menghapus pending task setelah berhasil dieksekusi ulang atau dikonfirmasi skip.
     """
     key = f"{PENDING_TASK_PREFIX}:{chat_id}"
     result = await _kv_request(["DEL", key])
@@ -553,12 +557,12 @@ async def clear_pending_task(chat_id: int) -> bool:
 async def update_pending_task_retry_count(chat_id: int, task: dict) -> bool:
     """
     Increment retry_count pada pending task yang ada.
-    Jika retry_count >= 3, hapus pending task (dianggap expired).
+    Maksimal auto-retry adalah 1x (max_retry: 1).
     """
     current_count = task.get("retry_count", 0)
-    if current_count >= 2:  # Akan menjadi retry ke-3, hapus saja
-        await clear_pending_task(chat_id)
-        logger.info("Pending task expired after 3 retries for chat_id %s", chat_id)
+    max_retry = task.get("max_retry", 1)
+    if current_count >= max_retry:
+        logger.info("Pending task reached max_retry (%d) for chat_id %s", max_retry, chat_id)
         return False
 
     key = f"{PENDING_TASK_PREFIX}:{chat_id}"

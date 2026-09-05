@@ -609,21 +609,16 @@ async def chat_with_oline(
                 user_name=user_name,
                 error_reason=err_msg[:200],
             )
+            # Coba ulang otomatis 1x secara instan per brief.md
+            try:
+                auto_retry_res = await retry_pending_task(chat_id)
+                if auto_retry_res:
+                    return auto_retry_res
+            except Exception as auto_err:
+                logger.warning("Immediate 1x auto-retry failed: %s", str(auto_err))
 
-        if (
-            "429" in err_msg
-            or "resourceexhausted" in err_msg.lower()
-            or "quota exceeded" in err_msg.lower()
-            or "rate limit" in err_msg.lower()
-        ):
-            return (
-                "aduh, trafik server AI lagi penuh banget nih 😅 "
-                "tapi tenang, perintah kamu udah Oline simpan — "
-                "nanti otomatis dicoba lagi ya!"
-            )
-        return (
-            "aduh maaf, aku lagi agak ngelag nih 😅 "
-            "tapi tenang, perintah kamu udah Oline simpan — "
-            "nanti otomatis dicoba lagi ya!"
-        )
+            # Jika 1x retry otomatis masih gagal -> Tanya konfirmasi ke pengguna
+            return "Task ini masih gagal nih. Mau dicoba lagi atau skip? 😢"
+
+        return "Task ini masih gagal nih. Mau dicoba lagi atau skip? 😢"
 
