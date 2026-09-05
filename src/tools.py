@@ -958,9 +958,8 @@ async def execute_get_journal_recap(
 
 async def execute_check_quota(chat_id: int) -> dict[str, Any]:
     """
-    Mengecek pemakaian token API (Gemini & Groq) hari ini dan menghitung sisa kuota.
-    Gemini daily limit: 1.000.000 token (1.500 req/hari).
-    Groq daily limit: 14.400.000 token (14.400 req/hari).
+    Mengecek pemakaian API (OpenRouter Model Rotation, Groq, & Gemini) hari ini.
+    Menampilkan model aktif, daftar rotasi, pemakaian per model, dan sisa antrean sebelum fallback.
     """
     GEMINI_LIMIT = 1_000_000
     GROQ_LIMIT = 14_400_000
@@ -971,24 +970,59 @@ async def execute_check_quota(chat_id: int) -> dict[str, Any]:
     gemini_remaining = max(0, GEMINI_LIMIT - gemini_used)
     groq_remaining = max(0, GROQ_LIMIT - groq_used)
 
+    # OpenRouter Model Rotation Quota Info
+    openrouter_info = {}
+    try:
+        from src.openrouter import get_openrouter_quota_info
+        openrouter_info = await get_openrouter_quota_info(chat_id)
+    except Exception as e:
+        logger.warning("Gagal mengambil info kuota OpenRouter: %s", str(e))
+        openrouter_info = {
+            "active_model": "Belum dikonfigurasi",
+            "models_status": [],
+            "remaining_in_rotation": 0,
+            "total_requests_today": 0,
+            "fallback_queue": ["Groq API", "Gemini API"],
+        }
+
+    active_model = openrouter_info.get("active_model", "N/A")
+    rem_models = openrouter_info.get("remaining_in_rotation", 0)
+    total_reqs = openrouter_info.get("total_requests_today", 0)
+    models_status = openrouter_info.get("models_status", [])
+
+    status_lines = []
+    for item in models_status:
+        m_name = item.get("model", "")
+        m_stat = item.get("status", "")
+        m_usage = item.get("usage", 0)
+        status_lines.append(f"  • [{item.get('order')}] {m_name} — {m_stat} ({m_usage} req hari ini)")
+
+    status_str = "\n".join(status_lines) if status_lines else "  • (Tidak ada model terdaftar)"
+
     return {
         "date": format_date_indonesian(datetime.now().strftime("%Y-%m-%d")),
+        "openrouter_active_model": active_model,
+        "openrouter_remaining_models_before_fallback": rem_models,
+        "openrouter_total_requests_today": total_reqs,
+        "openrouter_summary": (
+            f"🌐 OpenRouter Model Rotation (Jalur Utama Chat & Fitur Umum):\n"
+            f"  - Model Aktif: {active_model}\n"
+            f"  - Total Pemakaian Hari Ini: {total_reqs} request\n"
+            f"  - Sisa Model Antrean Sebelum Fallback: {rem_models} model\n"
+            f"  - Daftar Rotasi Model:\n{status_str}"
+        ),
         "groq_fast_path": (
-            f"⚡ Groq API (Fast Path / Sapaan): {groq_used:,} / {GROQ_LIMIT:,} token "
+            f"⚡ Groq API (Cadangan Fast Path): {groq_used:,} / {GROQ_LIMIT:,} token "
             f"({round((groq_used / GROQ_LIMIT) * 100, 1)}%), sisa {groq_remaining:,} token"
         ),
         "gemini_slow_path": (
-            f"🛠️ Gemini API (Slow Path / Tools): {gemini_used:,} / {GEMINI_LIMIT:,} token "
+            f"🛠️ Gemini API (Cadangan Slow Path): {gemini_used:,} / {GEMINI_LIMIT:,} token "
             f"({round((gemini_used / GEMINI_LIMIT) * 100, 1)}%), sisa {gemini_remaining:,} token"
         ),
+        "fallback_queue_info": "Cadangan jika semua model OpenRouter limit: 1. Groq API -> 2. Gemini API",
         "groq_tokens_used": groq_used,
         "groq_tokens_remaining": groq_remaining,
-        "groq_daily_limit": GROQ_LIMIT,
-        "gemini_tokens_used": gemini_used,
-        "gemini_tokens_remaining": gemini_remaining,
-        "gemini_daily_limit": GEMINI_LIMIT,
         "total_tokens_used_today": gemini_used + groq_used,
-        "note": "WAJIB tampilkan sisa kuota kedua API (Groq Fast Path dan Gemini Slow Path) secara terpisah di baris berbeda.",
     }
 
 

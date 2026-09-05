@@ -434,6 +434,32 @@ async def chat_with_oline(
                 )
                 # Fallback: lanjut ke pipeline Gemini di bawah
 
+        # 2.4 OpenRouter Path (Primary Model dengan Rotasi untuk Chat & Fitur Umum)
+        if intent not in ("preview", "deploy", "design_reference") and os.environ.get("OPENROUTER_API_KEY", "").strip():
+            try:
+                from src.openrouter import chat_openrouter
+
+                tool_declarations = get_tools_for_intent(intent)
+                logger.info("Executing OpenRouter Model Rotation for intent '%s', chat_id: %s", intent, chat_id)
+                openrouter_response = await chat_openrouter(
+                    system_prompt=system_prompt,
+                    history=history,
+                    user_message=user_message,
+                    tool_declarations=tool_declarations,
+                    chat_id=chat_id,
+                )
+
+                if openrouter_response:
+                    history.append({"role": "user", "text": user_message})
+                    history.append({"role": "model", "text": openrouter_response})
+                    await save_history(chat_id, history)
+                    return openrouter_response
+
+            except Exception as openrouter_err:
+                logger.warning(
+                    "OpenRouter Path gagal (%s). Beralih ke cadangan Groq/Gemini...", str(openrouter_err)
+                )
+
         # 2.5 Fast Path via Groq API (jika intent None dan GROQ_API_KEY diset)
         if intent is None and os.environ.get("GROQ_API_KEY", "").strip():
             try:
