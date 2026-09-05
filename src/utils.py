@@ -3,9 +3,10 @@ Utility functions untuk Oline bot.
 Berisi parser tanggal Indonesia dan helper umum.
 """
 
+import os
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 
 
 def get_current_time_context() -> str:
@@ -115,3 +116,39 @@ def truncate_text(text: str, max_length: int = 500) -> str:
     if len(text) <= max_length:
         return text
     return text[: max_length - 3] + "..."
+
+
+async def notify_process(
+    chat_id: int,
+    action: Optional[str] = "typing",
+    message: Optional[str] = None,
+    context: Optional[Any] = None,
+) -> None:
+    """
+    Mengirimkan chat action (typing, upload_photo, dll.)
+    dan/atau pesan status proses ke pengguna Telegram.
+    """
+    if not chat_id or chat_id == 0:
+        return
+
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+
+    try:
+        bot = None
+        if context and hasattr(context, "bot"):
+            bot = context.bot
+        elif token:
+            from telegram import Bot
+            bot = Bot(token=token)
+
+        if not bot:
+            return
+
+        if action:
+            await bot.send_chat_action(chat_id=chat_id, action=action)
+        if message and message.strip():
+            await bot.send_message(chat_id=chat_id, text=message.strip())
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("notify_process error for chat_id %s: %s", chat_id, str(e))
+

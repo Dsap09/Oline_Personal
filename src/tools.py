@@ -2479,6 +2479,24 @@ async def execute_tool(
 
     args = dict(func_args) if func_args else {}
 
+    # Notifikasi proses berjalan (per brief.md)
+    if chat_id and chat_id != 0:
+        try:
+            from src.utils import notify_process
+            tool_notifs = {
+                "preview_with_codepen": ("typing", "Aku buatkan preview dulu~"),
+                "deploy_to_vercel": ("typing", "Proses deploy ya, bentar~ 🚀"),
+                "search_design_reference": ("typing", "Bentar, aku cari referensinya dulu~"),
+                "search_internet": ("typing", "Aku cari dulu ya~"),
+                "get_weather_forecast": ("typing", None),
+                "get_stock_price": ("typing", None),
+            }
+            if func_name in tool_notifs:
+                act, msg = tool_notifs[func_name]
+                await notify_process(chat_id=chat_id, action=act, message=msg)
+        except Exception as notif_err:
+            logger.warning("Notification trigger failed in execute_tool: %s", str(notif_err))
+
     if func_name in ("save_journal_entry", "get_journal_recap"):
         args["chat_id"] = chat_id
         if func_name == "save_journal_entry":

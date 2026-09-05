@@ -504,7 +504,7 @@ async def handle_file_message(
     )
     if is_photo and not is_drive_request:
         await update.effective_chat.send_action("typing")
-        status_msg = await update.effective_chat.send_message("Oline sedang melihat... 👁️✨")
+        status_msg = await update.effective_chat.send_message("Oline lagi lihat gambarnya dulu ya~ 👀")
         from src.tools import analyze_image
 
         caption_lower = caption.lower()
