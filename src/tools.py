@@ -979,8 +979,7 @@ async def execute_send_voice_message(chat_id: int, text: str) -> dict[str, Any]:
         return {
             "quota_exceeded": True,
             "message": (
-                "Aduh, suara Oline bulan ini udah abis, bestie. "
-                "Tunggu bulan depan ya, atau kita ngobrol teks aja dulu~ 😘"
+                "Layanan pesan suara telah mencapai batas kuota penggunaan bulanan."
             ),
         }
 
@@ -1001,7 +1000,7 @@ async def execute_send_voice_message(chat_id: int, text: str) -> dict[str, Any]:
         logger.error("Failed to generate TTS: %s", str(e))
         return {
             "error": "Failed to generate TTS audio",
-            "message": f"Aduh, maaf ya, Oline lagi gagu nih 😅 Gagal bikin suaranya ({str(e)}).",
+            "message": f"Gagal menghasilkan pesan suara ({str(e)}).",
         }
 
     # 4. Simpan pemakaian karakter ke KV
@@ -1011,7 +1010,7 @@ async def execute_send_voice_message(chat_id: int, text: str) -> dict[str, Any]:
     sent = await send_voice_note_to_telegram(
         chat_id=chat_id,
         audio_bytes=audio_bytes,
-        caption="🎙️ dari Oline, spesial buat kamu~",
+        caption="🎙️ Pesan suara dari Oline",
     )
 
     if sent:
@@ -1045,7 +1044,7 @@ async def search_internet(query: str) -> dict[str, Any]:
         await asyncio.sleep(2)
 
         if not results:
-            return {"message": "Oline gak nemu info yang cocok nih, bestie."}
+            return {"message": "Informasi yang dicari tidak ditemukan."}
 
         snippets = []
         for r in results:
@@ -1060,7 +1059,7 @@ async def search_internet(query: str) -> dict[str, Any]:
         return {"results": "\n".join(snippets)}
     except Exception as e:
         logger.error("DuckDuckGo search error: %s", str(e))
-        return {"error": "Aduh, Oline lagi gak bisa akses internet nih. Coba lagi nanti ya~"}
+        return {"error": "Gagal mengakses koneksi internet. Silakan coba beberapa saat lagi."}
 
 
 def _get_top_movers(is_gainer: bool = True, limit: int = 3) -> str:
@@ -1225,7 +1224,7 @@ async def execute_list_drive_files(folder_name: Optional[str] = None) -> dict[st
         items = await asyncio.to_thread(list_files, service, folder_name)
         if not items:
             loc = f"folder '{folder_name}'" if folder_name else "Database Oline"
-            return {"message": f"Belum ada file di {loc} nih."}
+            return {"message": f"Belum ada file tersimpan pada {loc}."}
 
         formatted_items = []
         for item in items:
@@ -1249,7 +1248,7 @@ async def execute_search_drive_files(query: str) -> dict[str, Any]:
         service = get_drive_service()
         items = await asyncio.to_thread(search_files, service, query)
         if not items:
-            return {"message": f"Gak ketemu file yang cocok dengan nama '{query}' nih."}
+            return {"message": f"Tidak ditemukan file yang cocok dengan nama '{query}'."}
 
         formatted_items = []
         for item in items:
@@ -1275,8 +1274,8 @@ async def execute_upload_to_drive(
             return {
                 "error": "File tidak ditemukan",
                 "message": (
-                    "Oline gak nemu file yang baru kamu kirim nih. "
-                    "Coba kirim ulang file atau fotonya ya!"
+                    "Tidak ditemukan file baru yang dikirimkan. "
+                    "Silakan kirimkan kembali file atau foto yang ingin disimpan."
                 ),
             }
 
@@ -1434,8 +1433,8 @@ async def get_nearby_places(
         return {
             "error": "Lokasi belum disimpan",
             "message": (
-                "Oline belum tahu lokasi kamu nih! "
-                "Coba kirim titik lokasi kamu via Telegram dulu ya (tombol jepit kertas > Lokasi) 📍"
+                "Lokasi Anda belum tersimpan. "
+                "Silakan kirimkan titik lokasi Anda via Telegram (tombol lampiran > Lokasi) 📍"
             ),
         }
 
@@ -1445,7 +1444,7 @@ async def get_nearby_places(
     elements = await asyncio.to_thread(overpass_query, lat, lon, category, radius_m)
     if not elements:
         return {
-            "message": f"Tidak ditemukan {category} dalam radius {radius_km} km dari lokasi kamu."
+            "message": f"Tidak ditemukan {category} dalam radius {radius_km} km dari lokasi Anda."
         }
 
     results = []
@@ -2390,11 +2389,11 @@ async def analyze_image(
                 logger.warning("Space %s gagal / offline: %s. Mencoba fallback...", space_url, str(space_err))
                 continue
 
-        return "Aduh, mataku lagi error nih. Semua Space Moondream sedang tidak aktif atau lambat. Coba lagi nanti ya~"
+        return "Gagal menganalisis gambar: Layanan vision sedang tidak responsif. Silakan coba kembali."
 
     except Exception as e:
         logger.error("Moondream image analysis error: %s", str(e))
-        return "Aduh, mataku lagi error nih. Semua Space Moondream sedang tidak aktif atau lambat. Coba lagi nanti ya~"
+        return "Gagal menganalisis gambar: Layanan vision sedang tidak responsif. Silakan coba kembali."
     finally:
         if tmp_path and os.path.exists(tmp_path):
             try:
@@ -2445,7 +2444,7 @@ async def identify_image_subject(
         results = []
 
     if not results:
-        return f"Aku bisa lihat gambarnya: {deskripsi}. Tapi belum bisa pastikan nama atau identitas spesifiknya."
+        return f"Deskripsi visual: {deskripsi}. Namun identitas spesifik belum dapat dipastikan secara akurat."
 
     kandidat = [r.get("title", "") for r in results if r.get("title")]
     candidates_str = ", ".join(kandidat[:2]) if kandidat else "tidak terdeteksi"
@@ -2532,13 +2531,13 @@ async def execute_tool(
         try:
             from src.utils import notify_process
             tool_notifs = {
-                "preview_with_codepen": ("typing", "Aku buatkan preview dulu~"),
-                "deploy_to_vercel": ("typing", "Proses deploy ya, bentar~ 🚀"),
-                "search_design_reference": ("typing", "Bentar, aku cari referensinya dulu~"),
-                "search_internet": ("typing", "Aku cari dulu ya~"),
+                "preview_with_codepen": ("typing", "Preview sedang dibuat..."),
+                "deploy_to_vercel": ("typing", "Proses deploy sedang berlangsung... 🚀"),
+                "search_design_reference": ("typing", "Mencari referensi desain..."),
+                "search_internet": ("typing", "Mencari informasi di internet..."),
                 "get_weather_forecast": ("typing", None),
                 "get_stock_price": ("typing", None),
-                "identify_image_subject": ("typing", "Oline lagi cari tahu gambar ini... 🔍✨"),
+                "identify_image_subject": ("typing", "Menganalisis gambar... 🔍"),
             }
             if func_name in tool_notifs:
                 act, msg = tool_notifs[func_name]

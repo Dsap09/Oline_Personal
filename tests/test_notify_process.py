@@ -50,7 +50,7 @@ class TestNotifyProcess(unittest.IsolatedAsyncioTestCase):
             {"title": "Test", "html": "<h1>test</h1>"},
             chat_id=999,
         )
-        mock_notify.assert_called_once_with(chat_id=999, action="typing", message="Aku buatkan preview dulu~")
+        mock_notify.assert_called_once_with(chat_id=999, action="typing", message="Preview sedang dibuat...")
         self.assertEqual(res["status"], "success")
 
 

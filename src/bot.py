@@ -68,15 +68,14 @@ async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     welcome_text = (
-        "haii! aku Oline 👋\n\n"
-        "aku teman virtual kamu yang bisa bantu banyak hal:\n"
-        "💬 ngobrol santai tentang apa aja\n"
-        "🎬 rekomendasi film & lagu\n"
-        "🌤️ cek cuaca\n"
-        "📔 catat jurnal harian\n\n"
-        "langsung aja chat aku, gak perlu command khusus! "
-        "kecuali kalau mau cepet nulis jurnal, bisa pakai /jurnal.\n\n"
-        "btw, siapa namamu? biar aku bisa ingat 😊"
+        "Halo! Saya Oline, asisten AI pribadi Anda. 👋\n\n"
+        "Saya dapat membantu Anda menyelesaikan berbagai tugas:\n"
+        "💬 Pertanyaan & diskusi informasi\n"
+        "🎬 Rekomendasi film & musik\n"
+        "🌤️ Informasi cuaca terkini\n"
+        "📔 Catatan jurnal & memori\n"
+        "🌐 Preview & deploy landing page\n\n"
+        "Silakan langsung sampaikan permintaan Anda secara jelas!"
     )
     await update.effective_chat.send_message(welcome_text)
 
@@ -87,15 +86,15 @@ async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     help_text = (
-        "ini yang bisa aku bantu:\n\n"
-        "💬 *Ngobrol* — langsung chat aja\n"
-        "🎬 *Rekomendasi Film* — \"rekomendasiin film horor\"\n"
-        "🎵 *Rekomendasi Lagu* — \"cari lagu chill indonesia\"\n"
-        "🌤️ *Cek Cuaca* — \"cuaca besok di Bandung\"\n"
-        "📈 *Saham & IHSG* — \"cek saham BBCA\" / \"IHSG hari ini gimana\"\n"
-        "📔 *Jurnal* — /jurnal [catatan] atau \"catat jurnal hari ini: ...\"\n"
-        "📋 *Rekap Jurnal* — \"rekap jurnal minggu ini\"\n\n"
-        "semua bisa pakai bahasa biasa, aku otomatis ngerti kok 😌"
+        "Berikut adalah beberapa layanan yang dapat saya bantu:\n\n"
+        "💬 Chat & Informasi — Pertanyaan umum atau analisis data\n"
+        "🎬 Rekomendasi Film — \"rekomendasi film horor\"\n"
+        "🎵 Rekomendasi Lagu — \"cari lagu klasik\"\n"
+        "🌤️ Informasi Cuaca — \"cuaca besok di Bandung\"\n"
+        "📈 Saham & IHSG — \"cek saham BBCA\" / \"IHSG hari ini\"\n"
+        "📔 Jurnal — /jurnal [catatan] atau \"catat jurnal hari ini: ...\"\n"
+        "📋 Rekap Jurnal — \"rekap jurnal minggu ini\"\n\n"
+        "Anda dapat menyampaikan permintaan secara langsung."
     )
     await update.effective_chat.send_message(help_text, parse_mode="Markdown")
 
@@ -115,7 +114,7 @@ async def handle_jurnal_command(
     # Rate limiting
     if not await check_rate_limit(chat_id):
         await update.effective_chat.send_message(
-            "sabar ya, kamu udah kebanyakan chat 😅 tunggu sebentar lagi."
+            "Mohon tunggu sebentar sebelum mengirim pesan kembali."
         )
         return
 
@@ -126,8 +125,8 @@ async def handle_jurnal_command(
 
     if not text:
         await update.effective_chat.send_message(
-            "tulis jurnalmu setelah /jurnal ya!\n"
-            "contoh: `/jurnal hari ini seru banget, ketemu teman lama`"
+            "Silakan sertakan catatan jurnal setelah perintah /jurnal.\n"
+            "Contoh: `/jurnal Menghadiri rapat proyek dan menyelesaikan laporan.`"
         )
         return
 
@@ -135,12 +134,12 @@ async def handle_jurnal_command(
     success = await save_journal(chat_id, text)
     if success:
         await update.effective_chat.send_message(
-            "catatan kamu tersimpan rapi! 📖✨\n"
-            "kalau pengen liat rekap, tinggal bilang \"rekap jurnal minggu ini\" aja ya~"
+            "Catatan jurnal Anda telah berhasil disimpan. 📖✨\n"
+            "Untuk melihat rekap, Anda dapat meminta 'rekap jurnal minggu ini'."
         )
     else:
         await update.effective_chat.send_message(
-            "aduh, gagal nyimpen jurnal 😢 coba lagi nanti ya."
+            "Gagal menyimpan catatan jurnal. Silakan coba kembali beberapa saat lagi."
         )
 
 
@@ -354,7 +353,7 @@ async def handle_message(
 
     if not await check_rate_limit(chat_id):
         await update.effective_chat.send_message(
-            "sabar ya, kamu udah kebanyakan chat 😅 tunggu sebentar lagi."
+            "Mohon tunggu sebentar sebelum mengirim pesan kembali."
         )
         return
 
@@ -369,14 +368,14 @@ async def handle_message(
     if pending_task:
         if is_skip_request(user_message):
             await clear_pending_task(chat_id)
-            await update.effective_chat.send_message("Oke, task-nya aku skip~ Ada yang lain?")
+            await update.effective_chat.send_message("Baik, task telah dilewati. Apakah ada hal lain yang bisa saya bantu?")
             return
 
         if is_retry_request(user_message):
             await update.effective_chat.send_action("typing")
             retry_result = await retry_pending_task(chat_id)
             if retry_result:
-                prefix = "oke, perintah kamu yang tadi udah berhasil nih! 🎉\n\n"
+                prefix = "Perintah Anda yang sebelumnya telah berhasil diproses: 🎉\n\n"
                 response = prefix + retry_result
                 if len(response) > 4096:
                     for i in range(0, len(response), 4096):
@@ -386,7 +385,7 @@ async def handle_message(
                 return
             else:
                 await update.effective_chat.send_message(
-                    "Task ini masih gagal nih. Mau dicoba lagi atau skip? 😢"
+                    "Proses ini mengalami kendala teknis. Apakah Anda ingin mencoba ulang atau melewati task ini?"
                 )
                 return
 
@@ -456,7 +455,7 @@ async def handle_file_message(
 
     if not await check_rate_limit(chat_id):
         await update.effective_chat.send_message(
-            "sabar ya, kamu udah kebanyakan chat 😅 tunggu sebentar lagi."
+            "Mohon tunggu sebentar sebelum mengirim pesan kembali."
         )
         return
 
@@ -485,7 +484,7 @@ async def handle_file_message(
 
     if not file_bytes:
         await update.effective_chat.send_message(
-            "aduh, gagal mengunduh file/foto dari Telegram nih 😢 koneksi lagi lambat. Coba kirim ulang ya!"
+            "Gagal mengunduh berkas dari Telegram. Silakan coba kirim kembali."
         )
         return
 
@@ -501,11 +500,11 @@ async def handle_file_message(
         is_identification = any(kw in caption_lower for kw in ["ini apa", "ini siapa", "identifikasi", "apa ini", "siapa ini", "merek apa", "siapa dia"])
 
         if is_identification:
-            status_msg = await update.effective_chat.send_message("Oline lagi cari tahu gambar ini... 🔍✨")
+            status_msg = await update.effective_chat.send_message("Menganalisis gambar... 🔍")
             from src.tools import identify_image_subject
             raw_result = await identify_image_subject(file_bytes, context_hint=caption)
         else:
-            status_msg = await update.effective_chat.send_message("Oline lagi lihat gambarnya dulu ya~ 👀")
+            status_msg = await update.effective_chat.send_message("Menganalisis tampilan gambar... 🔍")
             from src.tools import analyze_image
 
             if any(kw in caption_lower for kw in ["deteksi objek", "objek apa", "ada apa saja", "objek"]):
@@ -535,7 +534,7 @@ async def handle_file_message(
             f"Berikut adalah hasil analisis gambar dari model vision (dalam bahasa Inggris):\n"
             f"\"{raw_result}\"\n\n"
             f"Pertanyaan/caption pengguna: \"{caption or 'Deskripsikan gambar ini'}\"\n\n"
-            f"Tolong sampaikan ulang kepada pengguna dalam Bahasa Indonesia yang natural, santai, dan mudah dipahami, sesuai gaya Oline. DILARANG menampilkan istilah teknis seperti 'Reasoning:' atau 'Answer:'."
+            f"Tolong sampaikan ulang kepada pengguna dalam Bahasa Indonesia yang profesional, jelas, dan mudah dipahami, sesuai persona Oline. DILARANG menampilkan istilah teknis seperti 'Reasoning:' atau 'Answer:'."
         )
 
         await update.effective_chat.send_action("typing")
@@ -543,7 +542,7 @@ async def handle_file_message(
 
         # Preservasi hasil Moondream agar tidak hilang jika AI pipeline mengembalikan teks kosong
         if not response or not response.strip():
-            response = f"Oline melihat ini: {raw_result} 😊"
+            response = f"Oline mengidentifikasi objek berikut: {raw_result}"
 
         try:
             await status_msg.edit_text(response)
@@ -566,9 +565,9 @@ async def handle_file_message(
         await update.effective_chat.send_message(response)
     else:
         await update.effective_chat.send_message(
-            f"File/Foto '{file_name}' udah Oline terima nih! 📄✨\n\n"
-            "Mau Oline simpan ke folder mana di database? "
-            "(misal: \"simpan ke folder Skripsi\" atau \"simpan file ini\")"
+            f"File '{file_name}' telah diterima. 📄✨\n\n"
+            "Mohon tentukan folder tujuan atau perintah penyimpanan yang Anda inginkan "
+            "(misal: \"simpan ke folder Skripsi\")."
         )
 
 
@@ -586,7 +585,7 @@ async def handle_location_message(
 
     if not await check_rate_limit(chat_id):
         await update.effective_chat.send_message(
-            "sabar ya, kamu udah kebanyakan chat 😅 tunggu sebentar lagi."
+            "Mohon tunggu sebentar sebelum mengirim pesan kembali."
         )
         return
 
@@ -599,13 +598,13 @@ async def handle_location_message(
 
     if success:
         await update.effective_chat.send_message(
-            "Lokasi kamu udah aku simpan! 📍✨\n"
-            "Sekarang tinggal bilang aja mau cari apa di sekitar sini "
-            "(misal: \"cafe terdekat\" atau \"toko buku terdekat\")~"
+            "Lokasi Anda telah berhasil disimpan. 📍✨\n"
+            "Sekarang Anda dapat mencari rekomendasi tempat di sekitar lokasi Anda "
+            "(misal: \"cafe terdekat\" atau \"toko buku terdekat\")."
         )
     else:
         await update.effective_chat.send_message(
-            "aduh, gagal nyimpen lokasi kamu 😢 coba kirim ulang ya."
+            "Gagal menyimpan lokasi Anda. Silakan coba kirim kembali titik lokasi Anda."
         )
 
 
