@@ -379,7 +379,12 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "save_note_to_notion",
-        "description": "Menyimpan catatan ke Notion database.",
+        "description": (
+            "Menyimpan catatan umum, dokumen, ide proyek, artikel, atau tulisan bebas ke Database Catatan Notion. "
+            "Gunakan HANYA saat pengguna meminta mencatat atau menyimpan catatan/dokumen/ide umum ke Notion "
+            "(misal: 'catat ini ke Notion', 'simpan catatan rapat di Notion', 'masukkan ide proyek ini ke Notion'). "
+            "JANGAN gunakan tool ini untuk menyimpan aturan/preferensi sistem."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -389,11 +394,39 @@ TOOL_DECLARATIONS = [
                 },
                 "content": {
                     "type": "string",
-                    "description": "Isi catatan.",
+                    "description": "Isi lengkap catatan.",
                 },
                 "category": {
                     "type": "string",
-                    "description": "Kategori catatan (opsional, misal: 'Umum', 'Skripsi', 'Riset', 'Pribadi'). Default: Umum.",
+                    "description": "Kategori catatan (misal: 'Umum', 'Skripsi', 'Riset', 'Pribadi'). Default: Umum.",
+                },
+            },
+            "required": ["title", "content"],
+        },
+    },
+    {
+        "name": "save_memory_to_notion",
+        "description": (
+            "Menyimpan memori, aturan sistem, preferensi pengguna, atau instruksi khusus ke Database Memori Notion ('Memori Oline'). "
+            "Gunakan HANYA saat pengguna meminta menyimpan atau mengingat aturan, preferensi pribadi, instruksi permanen, atau fakta pengguna "
+            "(misal: 'ingat bahwa...', 'mulai sekarang panggil saya...', 'selalu gunakan...', 'simpan preferensi/aturan ini ke Notion'). "
+            "JANGAN gunakan tool ini untuk menyimpan catatan/dokumen/ide biasa."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Judul singkat memori atau aturan (misal: 'Preferensi Panggilan', 'Aturan Bahasa').",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Isi lengkap memori, aturan, atau preferensi.",
+                },
+                "memory_type": {
+                    "type": "string",
+                    "enum": ["Aturan", "Preferensi", "Ringkasan", "Fakta"],
+                    "description": "Tipe memori: 'Aturan', 'Preferensi', 'Ringkasan', atau 'Fakta'. Default: Aturan.",
                 },
             },
             "required": ["title", "content"],
@@ -611,7 +644,7 @@ TOOLS_BY_INTENT = {
     ],
     "lokasi": ["get_nearby_places", "search_places_by_city"],
     "coding": ["execute_code"],
-    "notion": ["save_note_to_notion", "add_notion_property"],
+    "notion": ["save_note_to_notion", "save_memory_to_notion", "add_notion_property"],
     "preview": ["preview_with_codepen", "search_design_reference"],
     "deploy": [
         "deploy_to_vercel",
@@ -2090,6 +2123,15 @@ async def _lazy_save_note_to_notion(**kwargs):
     return await save_note_to_notion(**kwargs)
 
 
+async def _lazy_save_memory_to_notion(**kwargs):
+    """Lazy wrapper: import src.notion hanya saat tool ini dipanggil."""
+    from src.notion import save_memory_to_notion
+    res = await save_memory_to_notion(**kwargs)
+    if isinstance(res, str):
+        return {"status": "success", "message": res} if "berhasil" in res.lower() else {"error": res}
+    return res
+
+
 async def _lazy_add_notion_property(**kwargs):
     """Lazy wrapper: import src.notion hanya saat tool ini dipanggil."""
 
@@ -2472,6 +2514,7 @@ TOOL_EXECUTORS = {
     "search_places_by_city": search_places_by_city,
     "execute_code": execute_code,
     "save_note_to_notion": _lazy_save_note_to_notion,
+    "save_memory_to_notion": _lazy_save_memory_to_notion,
     "add_notion_property": _lazy_add_notion_property,
     "preview_with_codepen": preview_with_codepen,
     "deploy_to_vercel": deploy_to_vercel,
@@ -2579,7 +2622,7 @@ async def execute_tool(
                     await auto_log_aktivitas(chat_id, "deploy", args.get("project_name", "unknown"))
                 elif func_name == "preview_with_codepen":
                     await auto_log_aktivitas(chat_id, "preview", args.get("title", "unknown"))
-                elif func_name == "save_note_to_notion":
+                elif func_name in ("save_note_to_notion", "save_memory_to_notion"):
                     await auto_log_aktivitas(chat_id, "simpan catatan", args.get("title", "unknown"))
             except Exception as auto_log_err:
                 logger.warning("Auto-log Neo4j gagal (non-critical): %s", str(auto_log_err))

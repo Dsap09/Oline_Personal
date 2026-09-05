@@ -155,7 +155,8 @@ HEAVY_KEYWORDS = {
     "notion": [
         "notion", "catat ke notion", "simpan ke notion", "notes notion", "catatan notion",
         "tambah kolom", "buat kolom", "edit kolom", "tambah properti", "buat properti",
-        "kolom file", "kolom notion", "tambah atribut",
+        "kolom file", "kolom notion", "tambah atribut", "simpan aturan", "simpan preferensi",
+        "simpan memori", "catat aturan", "catat preferensi",
     ],
     "cuaca": ["cuaca", "hujan", "panas", "suhu", "cerah"],
     "rekomendasi": ["rekomendasi", "film", "lagu", "seri", "anime"],
@@ -256,9 +257,16 @@ async def detect_intent_async(text: str, chat_id: int | None = None) -> str | No
 
 RULE_KEYWORDS = [
     "jangan panggil", "mulai sekarang", "kedepannya", "ke depannya",
-    "selalu", "ingat", "jangan lupa", "kalo aku minta", "setiap kali",
-    "panggil aku", "panggil saya", "ingat ya", "catat ya",
+    "selalu", "ingat bahwa", "jangan lupa", "kalo aku minta", "setiap kali",
+    "panggil aku", "panggil saya", "ingat ya", "simpan aturan",
+    "simpan preferensi", "simpan memori", "preferensi saya", "aturan saya",
 ]
+
+NOTE_REQUEST_KEYWORDS = [
+    "catat ke notion", "simpan ke notion", "catat di notion", "simpan di notion",
+    "simpan ide", "catatan rapat", "simpan catatan",
+]
+
 
 SKIP_KEYWORDS = [
     "skip", "gak usah", "gak usah deh", "nggak usah", "batal",
@@ -330,6 +338,8 @@ def is_rule_message(text: str) -> bool:
     if not text:
         return False
     text_lower = text.lower().strip()
+    if any(kw in text_lower for kw in NOTE_REQUEST_KEYWORDS) and not any(rkw in text_lower for rkw in ["aturan", "preferensi", "ingat bahwa"]):
+        return False
     return any(kw in text_lower for kw in RULE_KEYWORDS)
 
 
