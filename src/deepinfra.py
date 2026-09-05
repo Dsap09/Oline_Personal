@@ -12,21 +12,20 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-DEEPINFRA_API_KEY = os.environ.get("DEEPINFRA_API_KEY", "").strip()
-DEEPINFRA_MODEL = os.environ.get("DEEPINFRA_MODEL", "deepseek-ai/DeepSeek-V4-Flash-0731")
 DEEPINFRA_BASE_URL = "https://api.deepinfra.com/v1/openai"
 
 
 def _get_deepinfra_client():
     """Mengembalikan instance OpenAI client yang dikonfigurasi untuk DeepInfra."""
-    if not DEEPINFRA_API_KEY:
+    api_key = os.environ.get("DEEPINFRA_API_KEY", "").strip()
+    if not api_key:
         raise ValueError(
             "DEEPINFRA_API_KEY environment variable is not set. "
             "Cannot initialize DeepInfra client."
         )
     from openai import OpenAI
     return OpenAI(
-        api_key=DEEPINFRA_API_KEY,
+        api_key=api_key,
         base_url=DEEPINFRA_BASE_URL,
     )
 
@@ -73,9 +72,11 @@ async def chat_deepinfra(
     # Konversi tools ke format OpenAI
     openai_tools = convert_tools_to_openai_format(tool_declarations) if tool_declarations else []
 
+    model_name = os.environ.get("DEEPINFRA_MODEL", "deepseek-ai/DeepSeek-V4-Flash-0731").strip()
+
     # Konfigurasi request
     kwargs: dict[str, Any] = {
-        "model": DEEPINFRA_MODEL,
+        "model": model_name,
         "messages": messages,
         "temperature": 0.9,
         "max_tokens": 4096,
@@ -161,7 +162,7 @@ async def chat_deepinfra(
 
         # Panggil ulang untuk mendapatkan respons final dari tool results
         follow_kwargs: dict[str, Any] = {
-            "model": DEEPINFRA_MODEL,
+            "model": model_name,
             "messages": messages,
             "temperature": 0.9,
             "max_tokens": 4096,
@@ -181,7 +182,7 @@ async def chat_deepinfra(
     if total_tokens > 0:
         logger.info(
             "DeepInfra (%s) completed. Total tokens: %d",
-            DEEPINFRA_MODEL, total_tokens,
+            model_name, total_tokens,
         )
 
     return final_text.strip()

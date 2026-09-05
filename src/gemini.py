@@ -404,8 +404,8 @@ async def chat_with_oline(
         # 2. Build system prompt
         system_prompt = await _build_system_prompt_async(memory, user_name=user_name)
 
-        # 2.3 DeepInfra Path: untuk intent preview & deploy, gunakan DeepSeek V4 Flash
-        if intent in ("preview", "deploy") and os.environ.get("DEEPINFRA_API_KEY", "").strip():
+        # 2.3 DeepInfra Path: untuk intent preview, deploy, & design_reference, gunakan DeepSeek V4 Flash
+        if intent in ("preview", "deploy", "design_reference") and os.environ.get("DEEPINFRA_API_KEY", "").strip():
             try:
                 from src.deepinfra import chat_deepinfra
 
@@ -547,7 +547,7 @@ async def chat_with_oline(
                 await save_usage(chat_id, total_tokens_session)
 
         except Exception as gemini_err:
-            if intent is not None and intent not in ("deploy", "preview") and os.environ.get("GROQ_API_KEY", "").strip():
+            if intent is not None and intent not in ("deploy", "preview", "design_reference") and os.environ.get("GROQ_API_KEY", "").strip():
                 logger.warning(
                     "Gemini Slow Path gagal (%s). Mencoba fallback ke Groq Slow Path...",
                     str(gemini_err),

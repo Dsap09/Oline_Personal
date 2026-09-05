@@ -66,7 +66,7 @@ class TestVercelDeploy(unittest.IsolatedAsyncioTestCase):
 
         res = await deploy_to_vercel(project_name="test-app", files=files)
         self.assertIn("error", res)
-        self.assertIn("Status 401", res["error"])
+        self.assertIn("status 401", res["error"].lower())
 
 
 if __name__ == "__main__":

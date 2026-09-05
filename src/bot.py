@@ -167,6 +167,21 @@ HEAVY_KEYWORDS = {
         "drive", "database", "folder", "simpan file", "buat folder",
         "cari file", "tampilkan isi", "kirim file", "upload", "download", "file",
     ],
+    "design_reference": [
+        "referensi desain", "cari referensi website", "inspirasi desain",
+        "contoh website", "cari desain website", "referensi landing page",
+        "referensi dari website", "referensinya dari",
+    ],
+    "deploy": [
+        "deploy sekarang", "deploy ke vercel", "deploy", "onlinekan", "publish",
+        "live", "hosting ke vercel", "hosting", "list landing page", "daftar landing page", "hapus landing page",
+        "hapus deployment", "list deployment", "daftar deployment", "delete deployment",
+    ],
+    "preview": [
+        "buatkan website", "buatkan landing page", "buat web", "bikin website",
+        "bikin landing page", "preview", "buat halaman", "desain web", "desain website",
+        "buatkan web", "bikin web", "buat landing page",
+    ],
     "lokasi": [
         "terdekat", "dekat", "toko buku", "cafe", "kafe", "restoran", "restaurant",
         "mall", "tempat makan", "kedai", "coffee", "cari tempat", "cari cafe", "spbu",
@@ -181,16 +196,6 @@ HEAVY_KEYWORDS = {
         "kode python", "kode javascript", "script", "debug", "coding",
         "contoh kode", "print", "buat fungsi", "buat script",
     ],
-    "preview": [
-        "buatkan website", "buatkan landing page", "buat web", "bikin website",
-        "bikin landing page", "preview", "buat halaman", "desain web", "desain website",
-        "buatkan web", "bikin web", "buat landing page",
-    ],
-    "deploy": [
-        "deploy sekarang", "deploy ke vercel", "deploy", "onlinekan", "publish",
-        "live", "list landing page", "daftar landing page", "hapus landing page",
-        "hapus deployment", "list deployment", "daftar deployment", "delete deployment",
-    ],
     "gambar": [
         "gambar", "foto", "image", "kirim gambar", "cari gambar", "cari foto",
         "tampilkan gambar", "kirimi gambar", "cariin gambar", "minta foto", "minta gambar",
@@ -199,11 +204,6 @@ HEAVY_KEYWORDS = {
         "aktivitas", "simpan aktivitas", "catat aktivitas",
         "riwayat aktivitas", "tampilkan aktivitas", "log aktivitas",
         "forensik", "neo4j", "graph",
-    ],
-    "design_reference": [
-        "referensi desain", "cari referensi website", "inspirasi desain",
-        "contoh website", "cari desain website", "referensi landing page",
-        "referensi dari website", "referensinya dari",
     ],
 }
 
